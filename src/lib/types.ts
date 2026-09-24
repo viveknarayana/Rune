@@ -15,6 +15,10 @@ export interface GraphNode {
   id: string;
   label: string;
   type: string;
+  color?: string;
+  icon?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface GraphEdge {
@@ -23,9 +27,17 @@ export interface GraphEdge {
   label?: string;
 }
 
+export interface GraphGroup {
+  id: string;
+  label: string;
+  memberIds: string[];
+  color?: string;
+}
+
 export interface CanvasState {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  groups: GraphGroup[];
 }
 
 export interface CompilerResult extends CanvasState {
@@ -35,4 +47,19 @@ export interface CompilerResult extends CanvasState {
   execution_time_ms: number;
   source: "jev" | "local";
   action: TopologyAction;
+  steps: string[];
 }
+
+export const NODE_TYPES = [
+  "FRONTEND",
+  "EDGE",
+  "GATEWAY",
+  "SECURITY",
+  "SERVICE",
+  "CACHE",
+  "STORAGE",
+  "TELEMETRY",
+  "CUSTOM",
+] as const;
+
+export type NodeTypeName = (typeof NODE_TYPES)[number];

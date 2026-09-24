@@ -1,4 +1,9 @@
-import { applyMentionedExtras, applyMutation, parseMutation } from "./mutations";
+import {
+  applyMentionedExtras,
+  applySteps,
+  emptyState,
+  parsePromptSteps,
+} from "./mutations";
 import type { CanvasState, TopologyAction } from "./types";
 
 const SAAS_CORE: CanvasState = {
@@ -15,6 +20,7 @@ const SAAS_CORE: CanvasState = {
     { source: "gateway", target: "app", label: "Route" },
     { source: "app", target: "db", label: "OLTP" },
   ],
+  groups: [],
 };
 
 const PAYMENT_CORE: CanvasState = {
@@ -31,6 +37,7 @@ const PAYMENT_CORE: CanvasState = {
     { source: "checkout", target: "payments", label: "Capture" },
     { source: "payments", target: "db", label: "Intent" },
   ],
+  groups: [],
 };
 
 const MESH_CORE: CanvasState = {
@@ -48,6 +55,7 @@ const MESH_CORE: CanvasState = {
     { source: "svc_a", target: "db", label: "Write" },
     { source: "svc_b", target: "db", label: "Read" },
   ],
+  groups: [],
 };
 
 function baseFor(action: TopologyAction): CanvasState {
@@ -60,9 +68,11 @@ export function inferAction(
   prompt: string,
   hasState: boolean,
 ): TopologyAction {
-  const mutation = parseMutation(prompt);
-  if (hasState && mutation) {
-    return mutation.kind === "outage" ? "SIMULATE_OUTAGE" : "MUTATE_GRAPH";
+  const steps = parsePromptSteps(prompt);
+  if (steps.length && (hasState || steps[0].kind !== "outage")) {
+    return steps.some((step) => step.kind === "outage") && steps.length === 1
+      ? "SIMULATE_OUTAGE"
+      : "MUTATE_GRAPH";
   }
   const p = prompt.toLowerCase();
   if (/(mesh|microservice|distributed)/.test(p)) return "MICROSERVICE_MESH_5";
@@ -74,12 +84,19 @@ export function processGraphAction(
   action: string,
   prompt: string,
   currentState?: CanvasState,
-): CanvasState {
-  const mutation = parseMutation(prompt);
-  if (currentState?.nodes.length && mutation) {
-    return applyMutation(currentState, mutation);
+): { state: CanvasState; steps: string[] } {
+  const mutations = parsePromptSteps(prompt);
+  if (mutations.length) {
+    const seed = currentState?.nodes.length
+      ? currentState
+      : mutations.every((m) => m.kind === "add" || m.kind === "connect")
+        ? emptyState()
+        : applyMentionedExtras(baseFor("SAAS_CONTROL_PLANE"), prompt);
+    return applySteps(seed, mutations);
   }
 
-  const topology = baseFor(action as TopologyAction);
-  return applyMentionedExtras(topology, prompt);
+  return {
+    state: applyMentionedExtras(baseFor(action as TopologyAction), prompt),
+    steps: ["Generate topology"],
+  };
 }

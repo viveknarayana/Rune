@@ -15,7 +15,7 @@ const TOPOLOGY_CRITERIA = {
   MICROSERVICE_MESH_5:
     "Generate a lean mesh: client, gateway, order, inventory, database. Add cache/queue only if named.",
   MUTATE_GRAPH:
-    "The user wants to mutate the current graph: remove a node or add X before/after Y. Do not regenerate.",
+    "Mutate the current graph: add a named box, remove a node, add X before/after Y, connect X to Y, group nodes in a square, or recolor. Do not regenerate.",
   SIMULATE_OUTAGE: "Mark a named node as failed without rebuilding the graph.",
 } as const;
 
@@ -54,17 +54,19 @@ function compileLocal(
 ): CompilerResult {
   const started = performance.now();
   const action = inferAction(prompt, Boolean(currentState?.nodes.length));
-  const topology = processGraphAction(action, prompt, currentState);
+  const { state, steps } = processGraphAction(action, prompt, currentState);
   const anomaly = action === "SIMULATE_OUTAGE";
 
   return {
-    ...topology,
+    ...state,
+    groups: state.groups ?? [],
     theme_mode: pickTheme(prompt, anomaly),
     is_anomaly: anomaly,
     stiffness: 8,
     execution_time_ms: Number((performance.now() - started).toFixed(2)),
     source: "local",
     action,
+    steps,
   };
 }
 
@@ -126,10 +128,11 @@ export async function evaluateJevSystemDesign(
     if (!decision) return local;
 
     const action = decision.answers.topology_action.choice as TopologyAction;
-    const topology = processGraphAction(action, prompt, currentState);
+    const { state, steps } = processGraphAction(action, prompt, currentState);
 
     return {
-      ...topology,
+      ...state,
+      groups: state.groups ?? [],
       theme_mode: decision.answers.theme_mode.choice as ThemeMode,
       is_anomaly: decision.answers.is_anomaly_detected.noul > 0.7,
       stiffness: Math.min(
@@ -139,6 +142,7 @@ export async function evaluateJevSystemDesign(
       execution_time_ms: Number((performance.now() - started).toFixed(2)),
       source: "jev",
       action,
+      steps,
     };
   } catch {
     return local;
