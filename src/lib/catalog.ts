@@ -1,3 +1,4 @@
+import { aliasMatches, resolveAwsService } from "./aws-catalog";
 import type { GraphNode } from "./types";
 
 export interface CatalogEntry extends GraphNode {
@@ -10,7 +11,8 @@ export const CATALOG: CatalogEntry[] = [
   { id: "lb", label: "Load Balancer", type: "GATEWAY", aliases: ["load balancer", "loadbalancer", "lb"] },
   { id: "gateway", label: "API Gateway", type: "GATEWAY", aliases: ["api gateway", "gateway", "ingress"] },
   { id: "auth", label: "Identity / Auth", type: "SECURITY", aliases: ["identity", "auth", "idp", "sso", "jwt"] },
-  { id: "app", label: "Application Service", type: "SERVICE", aliases: ["application", "app service", "app"] },
+  { id: "iam", label: "IAM", type: "SECURITY", aliases: ["iam role", "iam", "identity access management"] },
+  { id: "app", label: "Application Service", type: "SERVICE", aliases: ["application service", "application", "app service", "app"] },
   { id: "checkout", label: "Checkout Service", type: "SERVICE", aliases: ["checkout"] },
   { id: "payments", label: "Payments Service", type: "SERVICE", aliases: ["payments", "payment service"] },
   { id: "fraud", label: "Risk & Fraud Engine", type: "SECURITY", aliases: ["fraud engine", "risk engine", "fraud", "risk"] },
@@ -25,6 +27,9 @@ export const CATALOG: CatalogEntry[] = [
   { id: "db", label: "Primary Database", type: "STORAGE", aliases: ["primary database", "database", "postgres", "mysql", "db"] },
   { id: "object", label: "Object Storage", type: "STORAGE", aliases: ["object storage", "s3", "blob"] },
   { id: "obs", label: "Logs / Metrics / Traces", type: "TELEMETRY", aliases: ["observability", "telemetry", "metrics", "traces", "logs", "otel"] },
+  { id: "route53", label: "Route 53", type: "EDGE", aliases: ["route 53", "route53", "dns"] },
+  { id: "cloudfront", label: "CloudFront", type: "EDGE", aliases: ["cloudfront"] },
+  { id: "vpc", label: "VPC", type: "CUSTOM", aliases: ["vpc"] },
 ];
 
 const BY_ALIAS = [...CATALOG]
@@ -37,8 +42,18 @@ const BY_ALIAS = [...CATALOG]
   .sort((a, b) => b.alias.length - a.alias.length);
 
 export function resolveComponent(text: string): CatalogEntry | undefined {
+  const aws = resolveAwsService(text);
+  if (aws) {
+    return {
+      id: aws.id,
+      label: aws.short,
+      type: aws.type,
+      aliases: aws.aliases,
+      icon: aws.icon,
+    };
+  }
   const hay = text.toLowerCase().trim();
-  return BY_ALIAS.find(({ alias }) => hay.includes(alias))?.entry;
+  return BY_ALIAS.find(({ alias }) => aliasMatches(hay, alias))?.entry;
 }
 
 export function findInGraph(
@@ -54,11 +69,17 @@ export function findInGraph(
   return nodes.find(
     (n) =>
       n.id.toLowerCase() === hay ||
-      n.label.toLowerCase().includes(hay) ||
-      hay.includes(n.id.toLowerCase()),
+      aliasMatches(n.label, hay) ||
+      aliasMatches(hay, n.id) ||
+      aliasMatches(hay, n.label),
   );
 }
 
 export function toNode(entry: CatalogEntry): GraphNode {
-  return { id: entry.id, label: entry.label, type: entry.type };
+  return {
+    id: entry.id,
+    label: entry.label,
+    type: entry.type,
+    icon: entry.icon,
+  };
 }
