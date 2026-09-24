@@ -1,4 +1,4 @@
-# Prompt2Comp
+# Rune
 
 Frameless Tauri overlay. `⌘⇧J` shows it; `Esc` hides it. The first view is the AWS picker — the drawing board appears after you add a service or compile a graph. Follow-up language mutates that graph in place.
 

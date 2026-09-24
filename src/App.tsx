@@ -184,7 +184,7 @@ export default function App() {
     <div className="hud-shell flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/12 bg-zinc-950/35 px-4 pt-3 pb-3 shadow-[0_30px_90px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
       <div id="titlebar" className="mb-1 flex items-center justify-between">
         <p className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">
-          Prompt2Comp
+          Rune
         </p>
         <LatencyHud
           jevMs={decision?.execution_time_ms ?? 0}

@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "JevSystemGenerator",
+  "productName": "Rune",
   "version": "0.1.0",
-  "identifier": "com.prompt2comp.jev",
+  "identifier": "com.viveknarayana.rune",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Jev Overlay",
+        "title": "Rune",
         "width": 880,
         "height": 760,
         "resizable": false,

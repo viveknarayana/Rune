@@ -33,7 +33,7 @@ export const NAMED_COLORS: Record<string, string> = {
   grey: "#94A3B8",
 };
 
-const STORAGE_KEY = "prompt2comp.palette";
+const STORAGE_KEY = "rune.palette";
 
 export function loadPalette(): ColorPalette {
   try {
