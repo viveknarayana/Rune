@@ -16,7 +16,7 @@
         "label": "main",
         "title": "Jev Overlay",
         "width": 880,
-        "height": 620,
+        "height": 760,
         "resizable": false,
         "decorations": false,
         "transparent": true,
