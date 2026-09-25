@@ -31,6 +31,16 @@ export const NAMED_COLORS: Record<string, string> = {
   white: "#F8FAFC",
   gray: "#94A3B8",
   grey: "#94A3B8",
+  black: "#111113",
+  charcoal: "#1F1F23",
+  ink: "#0D0E11",
+  slate: "#64748B",
+  navy: "#1E3A8A",
+  gold: "#EAB308",
+  brown: "#B45309",
+  lime: "#84CC16",
+  magenta: "#E879F9",
+  violet: "#8B5CF6",
 };
 
 const STORAGE_KEY = "rune.palette";

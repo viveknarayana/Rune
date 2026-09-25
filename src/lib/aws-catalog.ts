@@ -50,7 +50,7 @@ export const AWS_SERVICES: AwsService[] = [
   { id: "vpc", label: "Amazon VPC", short: "VPC", category: "Networking", type: "CUSTOM", aliases: ["vpc"], icon: ICON("AmazonVPC") },
   { id: "route53", label: "Amazon Route 53", short: "Route 53", category: "Networking", type: "EDGE", aliases: ["route 53", "route53", "dns"], icon: ICON("AmazonRoute53") },
   { id: "cloudfront", label: "Amazon CloudFront", short: "CloudFront", category: "Networking", type: "EDGE", aliases: ["cloudfront", "cdn"], icon: ICON("AmazonCloudFront") },
-  { id: "apigateway", label: "Amazon API Gateway", short: "API GW", category: "Networking", type: "GATEWAY", aliases: ["api gateway", "apigateway"], icon: ICON("AmazonAPIGateway") },
+  { id: "apigateway", label: "Amazon API Gateway", short: "API GW", category: "Networking", type: "GATEWAY", aliases: ["api gateway", "api gw", "apigw", "apigateway"], icon: ICON("AmazonAPIGateway") },
   { id: "elb", label: "Elastic Load Balancing", short: "ELB", category: "Networking", type: "GATEWAY", aliases: ["elb", "alb", "nlb", "load balancer"], icon: ICON("ElasticLoadBalancing") },
   { id: "transitgateway", label: "Transit Gateway", short: "TGW", category: "Networking", type: "GATEWAY", aliases: ["transit gateway", "tgw"], icon: ICON("AWSTransitGateway") },
   { id: "privatelink", label: "AWS PrivateLink", short: "PrivateLink", category: "Networking", type: "GATEWAY", aliases: ["privatelink"], icon: ICON("AWSPrivateLink") },

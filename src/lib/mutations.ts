@@ -1,5 +1,14 @@
-import { findInGraph, resolveComponent, toNode } from "./catalog";
+import { bestInGraph, findInGraph, resolveComponent, toNode } from "./catalog";
 import { resolveNamedColor } from "./colors";
+import {
+  applyCase,
+  applyIntent,
+  getIntent,
+  matchIntent,
+  parseHandleCase,
+  resolveCase,
+} from "./intents";
+import { applyPattern, getPattern, matchPattern, resolvePattern } from "./patterns";
 import type { CanvasState, GraphEdge, GraphGroup, GraphNode } from "./types";
 
 export type Mutation =
@@ -7,11 +16,15 @@ export type Mutation =
   | { kind: "insert_before"; node: string; before: string }
   | { kind: "insert_after"; node: string; after: string }
   | { kind: "add"; node: string }
+  | { kind: "attach"; node: string; target: string }
   | { kind: "connect"; source: string; target: string; label?: string }
   | { kind: "group"; members: string[]; label: string }
   | { kind: "ungroup"; target: string }
   | { kind: "color"; target: string; color: string }
-  | { kind: "outage"; target?: string };
+  | { kind: "outage"; target?: string }
+  | { kind: "apply_pattern"; pattern: string; anchor?: string }
+  | { kind: "apply_intent"; intent: string; anchor?: string }
+  | { kind: "apply_case"; case: string; anchor?: string };
 
 function strip(text: string) {
   return text
@@ -101,7 +114,7 @@ export function parseMutation(prompt: string): Mutation | null {
   if (ungroup) return { kind: "ungroup", target: strip(ungroup[1]) };
 
   const color = p.match(
-    /(?:color|paint|make|recolor)\s+(?:the )?(.+?)\s+(?:as |to )?([#a-zA-Z][\w-]*)$/i,
+    /(?:colou?r|paint|make|recolou?r)\s+(?:the )?(.+?)\s+(?:as |to )?([#a-zA-Z][\w-]*)$/i,
   );
   if (color) {
     const hex = resolveNamedColor(color[2]);
@@ -113,6 +126,25 @@ export function parseMutation(prompt: string): Mutation | null {
   );
   if (remove) return { kind: "remove", target: strip(remove[1]) };
 
+  const applyPat = p.match(
+    /^(?:apply|use)\s+(?:the\s+)?(.+?)(?:\s+pattern)?$/i,
+  );
+  if (applyPat) {
+    const hit = resolvePattern(applyPat[1]);
+    if (hit) return { kind: "apply_pattern", pattern: hit.id };
+  }
+
+  const attach = p.match(
+    /^(?:add|insert|put|hook|wire)\s+(?:a |an |the )?(.+?)\s+(?:to|onto|into|on|into the)\s+(?:the |a |an )?(.+)$/i,
+  );
+  if (attach) {
+    const node = strip(attach[1]);
+    const target = strip(attach[2]);
+    if (node && target && !/^(graph|board|diagram|canvas)$/i.test(target)) {
+      return { kind: "attach", node, target };
+    }
+  }
+
   const addQuoted = p.match(
     /(?:add|insert)\s+["“](.+?)["”](?:\s+component)?$/i,
   );
@@ -121,18 +153,33 @@ export function parseMutation(prompt: string): Mutation | null {
   const addBare = p.match(
     /(?:add|insert)\s+(?:a |an |the )?(.+?)(?:\s+component)?$/i,
   );
-  if (addBare) return { kind: "add", node: strip(addBare[1]) };
+  if (addBare) {
+    const hit = matchPattern(addBare[1], "named");
+    if (hit) return { kind: "apply_pattern", pattern: hit.id };
+    return { kind: "add", node: strip(addBare[1]) };
+  }
+
+  const whole = matchPattern(p);
+  if (whole && p.split(/\s+/).length >= 2) {
+    return { kind: "apply_pattern", pattern: whole.id };
+  }
+
+  const handleCase = parseHandleCase(p);
+  if (handleCase) return { kind: "apply_case", case: handleCase };
 
   if (/(outage|take down|fail)/i.test(p)) {
     const on = p.match(/(?:on|of|in)\s+(?:the )?(.+)$/i);
     return { kind: "outage", target: on ? strip(on[1]) : undefined };
   }
 
+  const intent = matchIntent(p);
+  if (intent) return { kind: "apply_intent", intent: intent.id };
+
   return null;
 }
 
 const NEXT_STEP =
-  "(?:add|insert|connect|link|remove|delete|group|wrap|put|square|box|frame|color|paint|ungroup|then)";
+  "(?:add|insert|connect|link|remove|delete|group|wrap|put|square|box|frame|color|paint|ungroup|apply|use|then)";
 
 const STEP_SPLIT = new RegExp(
   `;|\\n+|\\.\\s+(?=${NEXT_STEP})|\\s+then\\s+|\\s+and then\\s+|,\\s*and\\s+(?=${NEXT_STEP})|,\\s*(?=${NEXT_STEP})`,
@@ -178,6 +225,13 @@ function bindFocus(mutation: Mutation, focus?: string): Mutation {
   if (mutation.kind === "remove" && isPronoun(mutation.target) && focus) {
     return { ...mutation, target: focus };
   }
+  if (mutation.kind === "attach" && focus) {
+    return {
+      ...mutation,
+      node: isPronoun(mutation.node) ? focus : mutation.node,
+      target: isPronoun(mutation.target) ? focus : mutation.target,
+    };
+  }
   return mutation;
 }
 
@@ -185,6 +239,8 @@ export function describeStep(mutation: Mutation): string {
   switch (mutation.kind) {
     case "add":
       return `Add ${mutation.node}`;
+    case "attach":
+      return `Add ${mutation.node} → ${mutation.target}`;
     case "insert_before":
       return `Add ${mutation.node} before ${mutation.before}`;
     case "insert_after":
@@ -201,30 +257,57 @@ export function describeStep(mutation: Mutation): string {
       return `Color ${mutation.target}`;
     case "outage":
       return `Outage on ${mutation.target ?? "service"}`;
+    case "apply_pattern":
+      return `Apply ${getPattern(mutation.pattern)?.label ?? mutation.pattern}`;
+    case "apply_intent":
+      return getIntent(mutation.intent)?.label ?? mutation.intent;
+    case "apply_case":
+      return `Handle ${resolveCase(mutation.case).label}`;
   }
 }
 
 export function applySteps(
   start: CanvasState,
   mutations: Mutation[],
+  initialFocus?: string,
 ): { state: CanvasState; steps: string[] } {
   let state = start;
-  let focus: string | undefined;
+  let focus: string | undefined = initialFocus;
   const steps: string[] = [];
 
   for (const raw of mutations) {
     const mutation = bindFocus(raw, focus);
     const before = new Set(state.nodes.map((n) => n.id));
-    state = applyMutation(state, mutation);
+    state =
+      mutation.kind === "add"
+        ? addNode(state, mutation.node, focus)
+        : applyMutation(state, mutation);
     const added = state.nodes.find((n) => !before.has(n.id));
     if (added) focus = added.id;
+    else if (mutation.kind === "attach") {
+      focus = findInGraph(state.nodes, mutation.node)?.id ?? focus;
+    }
     else if (mutation.kind === "connect") {
       focus =
         findInGraph(state.nodes, mutation.source)?.id ??
         findInGraph(state.nodes, mutation.target)?.id ??
         focus;
     }
-    steps.push(describeStep(mutation));
+    if (mutation.kind === "add" && added) {
+      const wired = state.edges.find(
+        (edge) => edge.source === added.id || edge.target === added.id,
+      );
+      const otherId =
+        wired && (wired.source === added.id ? wired.target : wired.source);
+      const other = otherId
+        ? state.nodes.find((node) => node.id === otherId)
+        : undefined;
+      steps.push(
+        other ? `Add ${added.label} → ${other.label}` : describeStep(mutation),
+      );
+    } else {
+      steps.push(describeStep(mutation));
+    }
   }
 
   return { state, steps };
@@ -288,20 +371,48 @@ export function removeNode(state: CanvasState, targetText: string): CanvasState 
   };
 }
 
+function slug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "node";
+}
+
+function uniqueId(state: CanvasState, base: string): string {
+  let index = 2;
+  let id = `${base}_${index}`;
+  while (state.nodes.some((node) => node.id === id)) {
+    index += 1;
+    id = `${base}_${index}`;
+  }
+  return id;
+}
+
+function nextCopyLabel(label: string, nodes: GraphNode[]): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const numbered = new RegExp(`^${escaped}(?: (\\d+))?$`, "i");
+  let max = 1;
+  for (const node of nodes) {
+    const match = node.label.match(numbered);
+    if (match) max = Math.max(max, match[1] ? Number(match[1]) : 1);
+  }
+  return `${label} ${max + 1}`;
+}
+
+function createFresh(state: CanvasState, text: string): GraphNode {
+  const catalog = resolveComponent(text);
+  const base = catalog
+    ? toNode(catalog)
+    : { id: slug(text), label: text, type: "CUSTOM" };
+  if (!state.nodes.some((node) => node.id === base.id)) return base;
+  return {
+    ...base,
+    id: uniqueId(state, base.id),
+    label: nextCopyLabel(base.label, state.nodes),
+  };
+}
+
 function resolveOrCreate(state: CanvasState, text: string): GraphNode {
   const existing = findInGraph(state.nodes, text);
   if (existing) return existing;
-  const catalog = resolveComponent(text);
-  if (catalog) return toNode(catalog);
-  const id =
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_|_$/g, "") || "node";
-  const unique = state.nodes.some((n) => n.id === id)
-    ? `${id}_${state.nodes.length}`
-    : id;
-  return { id: unique, label: text, type: "CUSTOM" };
+  return createFresh(state, text);
 }
 
 export function insertBefore(
@@ -312,7 +423,7 @@ export function insertBefore(
   const next = clone(state);
   const anchor = findInGraph(next.nodes, beforeText);
   if (!anchor) return addNode(next, nodeText);
-  const node = resolveOrCreate(next, nodeText);
+  const node = createFresh(next, nodeText);
   if (!next.nodes.some((n) => n.id === node.id)) next.nodes.push(node);
 
   next.edges = next.edges.map((edge) =>
@@ -332,7 +443,7 @@ export function insertAfter(
   const next = clone(state);
   const anchor = findInGraph(next.nodes, afterText);
   if (!anchor) return addNode(next, nodeText);
-  const node = resolveOrCreate(next, nodeText);
+  const node = createFresh(next, nodeText);
   if (!next.nodes.some((n) => n.id === node.id)) next.nodes.push(node);
 
   next.edges = next.edges.map((edge) =>
@@ -344,10 +455,122 @@ export function insertAfter(
   return next;
 }
 
-export function addNode(state: CanvasState, nodeText: string): CanvasState {
+const FLOWS: Record<string, string[]> = {
+  FRONTEND: ["EDGE", "GATEWAY", "SERVICE"],
+  EDGE: ["GATEWAY", "SERVICE"],
+  GATEWAY: ["SECURITY", "SERVICE", "CACHE"],
+  SECURITY: ["GATEWAY", "SERVICE"],
+  SERVICE: ["CACHE", "STORAGE", "TELEMETRY", "SERVICE", "GATEWAY"],
+  CACHE: ["STORAGE", "SERVICE"],
+  STORAGE: ["SERVICE"],
+  TELEMETRY: ["SERVICE", "STORAGE"],
+  CUSTOM: ["SERVICE", "GATEWAY", "STORAGE", "TELEMETRY"],
+};
+
+function wireLabel(sourceType: string, targetType: string): string {
+  if (targetType === "STORAGE") return "Write";
+  if (targetType === "CACHE") return "Cache";
+  if (targetType === "SECURITY") return "Verify";
+  if (targetType === "TELEMETRY") return "Emit";
+  if (sourceType === "FRONTEND" || sourceType === "EDGE") return "HTTPS";
+  return "Link";
+}
+
+function pickWirePartner(
+  nodes: GraphNode[],
+  added: GraphNode,
+  preferId?: string,
+): GraphNode | undefined {
+  if (preferId) {
+    const preferred = nodes.find((node) => node.id === preferId && node.id !== added.id);
+    if (preferred) return preferred;
+  }
+  let best: GraphNode | undefined;
+  let score = 0;
+  for (const node of nodes) {
+    if (node.id === added.id) continue;
+    let next = 1;
+    if (FLOWS[added.type]?.includes(node.type)) next += 6;
+    if (FLOWS[node.type]?.includes(added.type)) next += 5;
+    if (node.type === "SERVICE" || node.type === "GATEWAY") next += 1;
+    if (next > score) {
+      score = next;
+      best = node;
+    }
+  }
+  return best;
+}
+
+function autoWire(
+  state: CanvasState,
+  added: GraphNode,
+  preferId?: string,
+): CanvasState {
+  if (state.nodes.length < 2) return state;
+  const partner = pickWirePartner(state.nodes, added, preferId);
+  if (!partner) return state;
+  const addedFlowsToPartner = FLOWS[added.type]?.includes(partner.type);
+  const partnerFlowsToAdded = FLOWS[partner.type]?.includes(added.type);
+  let source = partner;
+  let target = added;
+  if (
+    addedFlowsToPartner &&
+    !partnerFlowsToAdded &&
+    !["STORAGE", "CACHE", "TELEMETRY"].includes(added.type)
+  ) {
+    source = added;
+    target = partner;
+  } else if (added.type === "FRONTEND" || added.type === "EDGE") {
+    source = added;
+    target = partner;
+  }
+  if (
+    state.edges.some(
+      (edge) => edge.source === source.id && edge.target === target.id,
+    )
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    edges: [
+      ...state.edges,
+      {
+        source: source.id,
+        target: target.id,
+        label: wireLabel(source.type, target.type),
+      },
+    ],
+  };
+}
+
+export function addNode(
+  state: CanvasState,
+  nodeText: string,
+  preferId?: string,
+): CanvasState {
   const next = clone(state);
-  const node = resolveOrCreate(next, nodeText);
-  if (!next.nodes.some((n) => n.id === node.id)) next.nodes.push(node);
+  const node = createFresh(next, nodeText);
+  if (!next.nodes.some((item) => item.id === node.id)) next.nodes.push(node);
+  return autoWire(next, node, preferId);
+}
+
+export function attachNode(
+  state: CanvasState,
+  nodeText: string,
+  targetText: string,
+): CanvasState {
+  const next = clone(state);
+  const node = bestInGraph(next.nodes, nodeText) ?? createFresh(next, nodeText);
+  if (!next.nodes.some((item) => item.id === node.id)) next.nodes.push(node);
+  const target =
+    bestInGraph(next.nodes, targetText) ?? createFresh(next, targetText);
+  if (!next.nodes.some((item) => item.id === target.id)) next.nodes.push(target);
+  if (
+    !next.edges.some((edge) => edge.source === node.id && edge.target === target.id)
+  ) {
+    next.edges.push({ source: node.id, target: target.id, label: "Link" });
+  }
   return next;
 }
 
@@ -457,6 +680,8 @@ export function applyMutation(
       return insertAfter(state, mutation.node, mutation.after);
     case "add":
       return addNode(state, mutation.node);
+    case "attach":
+      return attachNode(state, mutation.node, mutation.target);
     case "connect":
       return connectNodes(state, mutation.source, mutation.target, mutation.label);
     case "group":
@@ -467,6 +692,16 @@ export function applyMutation(
       return colorNode(state, mutation.target, mutation.color);
     case "outage":
       return markOutage(state, mutation.target);
+    case "apply_pattern": {
+      const pattern = getPattern(mutation.pattern);
+      return pattern ? applyPattern(state, pattern, mutation.anchor) : state;
+    }
+    case "apply_intent": {
+      const intent = getIntent(mutation.intent);
+      return intent ? applyIntent(state, intent, mutation.anchor) : state;
+    }
+    case "apply_case":
+      return applyCase(state, mutation.case, mutation.anchor);
   }
 }
 
