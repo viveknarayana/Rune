@@ -10,145 +10,83 @@ export interface PositionedNode extends GraphNode {
 
 export const NODE_WIDTH = 176;
 export const NODE_HEIGHT = 84;
-const GAP = 28;
 
 function hasPosition(node: GraphNode): node is GraphNode & { x: number; y: number } {
   return Number.isFinite(node.x) && Number.isFinite(node.y);
 }
 
-function boxOf(node: { x: number; y: number }): {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-} {
-  return { x: node.x, y: node.y, width: NODE_WIDTH, height: NODE_HEIGHT };
+function structureKey(nodes: GraphNode[], edges: GraphEdge[], groups?: GraphGroup[]) {
+  const nodeIds = nodes.map((node) => node.id).sort().join(",");
+  const edgeIds = edges
+    .map((edge) => `${edge.source}>${edge.target}`)
+    .sort()
+    .join(",");
+  const groupIds = (groups ?? [])
+    .map((group) => `${group.id}:${[...group.memberIds].sort().join("+")}`)
+    .sort()
+    .join(",");
+  return `${nodeIds}|${edgeIds}|${groupIds}`;
 }
 
-function overlaps(
-  a: { x: number; y: number; width: number; height: number },
-  b: { x: number; y: number; width: number; height: number },
-) {
-  return !(
-    a.x + a.width + GAP <= b.x ||
-    b.x + b.width + GAP <= a.x ||
-    a.y + a.height + GAP <= b.y ||
-    b.y + b.height + GAP <= a.y
-  );
-}
-
-function resolveCollision(
-  pos: { x: number; y: number },
-  others: PositionedNode[],
-): { x: number; y: number } {
-  let { x, y } = pos;
-  for (let i = 0; i < 48; i += 1) {
-    const box = { x, y, width: NODE_WIDTH, height: NODE_HEIGHT };
-    const hit = others.find((other) => overlaps(box, boxOf(other)));
-    if (!hit) break;
-    y = hit.y + NODE_HEIGHT + GAP;
-  }
-  return { x: Math.max(8, x), y: Math.max(8, y) };
-}
-
-function placeUnlocked(
-  node: GraphNode,
-  placed: PositionedNode[],
+function runDagre(
+  nodes: GraphNode[],
   edges: GraphEdge[],
-): PositionedNode {
-  const incoming = edges
-    .filter((edge) => edge.target === node.id)
-    .map((edge) => placed.find((item) => item.id === edge.source))
-    .filter((item): item is PositionedNode => Boolean(item));
-  const outgoing = edges
-    .filter((edge) => edge.source === node.id)
-    .map((edge) => placed.find((item) => item.id === edge.target))
-    .filter((item): item is PositionedNode => Boolean(item));
-
-  let x = 8;
-  let y = 8;
-
-  if (incoming.length) {
-    x = incoming.reduce((sum, item) => sum + item.x, 0) / incoming.length;
-    y = Math.max(...incoming.map((item) => item.y + NODE_HEIGHT)) + GAP;
-  } else if (outgoing.length) {
-    x = outgoing.reduce((sum, item) => sum + item.x, 0) / outgoing.length;
-    y = Math.min(...outgoing.map((item) => item.y)) - NODE_HEIGHT - GAP;
-    if (y < 8) {
-      y = outgoing[0].y;
-      x = Math.min(...outgoing.map((item) => item.x)) - NODE_WIDTH - GAP;
-    }
-  } else if (placed.length) {
-    x = Math.max(...placed.map((item) => item.x + item.width)) + GAP;
-    y = Math.min(...placed.map((item) => item.y));
+  groups?: GraphGroup[],
+): PositionedNode[] {
+  const g = new dagre.graphlib.Graph({ compound: true, directed: true });
+  g.setGraph({
+    rankdir: "TB",
+    nodesep: 36,
+    ranksep: 56,
+    edgesep: 18,
+    marginx: 16,
+    marginy: 16,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+  nodes.forEach((node) =>
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT }),
+  );
+  const known = new Set(nodes.map((node) => node.id));
+  for (const group of groups ?? []) {
+    const members = group.memberIds.filter((id) => known.has(id));
+    if (members.length < 2) continue;
+    g.setNode(group.id, { width: 0, height: 0 });
+    for (const id of members) g.setParent(id, group.id);
   }
-
-  const resolved = resolveCollision({ x, y }, placed);
-  return {
-    ...node,
-    ...resolved,
-    width: NODE_WIDTH,
-    height: NODE_HEIGHT,
-  };
+  edges.forEach((edge) => {
+    if (known.has(edge.source) && known.has(edge.target)) {
+      g.setEdge(edge.source, edge.target);
+    }
+  });
+  dagre.layout(g);
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    return {
+      ...node,
+      x: (pos?.x ?? 0) - NODE_WIDTH / 2,
+      y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+    };
+  });
 }
 
 export function computeGraphLayout(
   nodes: GraphNode[],
   edges: GraphEdge[],
+  groups?: GraphGroup[],
 ): { positionedNodes: PositionedNode[]; edges: GraphEdge[]; layoutMs: number } {
   const started = performance.now();
-  const locked = nodes.filter(hasPosition);
-  const unlocked = nodes.filter((node) => !hasPosition(node));
-
-  let positionedNodes: PositionedNode[];
-
-  if (unlocked.length === 0) {
-    positionedNodes = nodes.map((node) => ({
-      ...node,
-      x: node.x as number,
-      y: node.y as number,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-    }));
-  } else if (locked.length === 0) {
-    const g = new dagre.graphlib.Graph();
-    g.setGraph({
-      rankdir: "TB",
-      nodesep: 28,
-      ranksep: 46,
-      marginx: 12,
-      marginy: 12,
-    });
-    g.setDefaultEdgeLabel(() => ({}));
-    nodes.forEach((node) =>
-      g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT }),
-    );
-    edges.forEach((edge) => g.setEdge(edge.source, edge.target));
-    dagre.layout(g);
-    positionedNodes = nodes.map((node) => {
-      const pos = g.node(node.id);
-      return {
+  const canReuse = nodes.length > 0 && nodes.every(hasPosition);
+  const positionedNodes = canReuse
+    ? nodes.map((node) => ({
         ...node,
-        x: pos.x - NODE_WIDTH / 2,
-        y: pos.y - NODE_HEIGHT / 2,
+        x: node.x as number,
+        y: node.y as number,
         width: NODE_WIDTH,
         height: NODE_HEIGHT,
-      };
-    });
-  } else {
-    const placed: PositionedNode[] = locked.map((node) => ({
-      ...node,
-      x: node.x,
-      y: node.y,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-    }));
-    for (const node of unlocked) {
-      placed.push(placeUnlocked(node, placed, edges));
-    }
-    const byId = new Map(placed.map((node) => [node.id, node]));
-    positionedNodes = nodes.map((node) => byId.get(node.id)!);
-  }
+      }))
+    : runDagre(nodes, edges, groups);
 
   return {
     positionedNodes,
@@ -157,15 +95,72 @@ export function computeGraphLayout(
   };
 }
 
-export function persistNodePositions(nodes: GraphNode[], edges: GraphEdge[]) {
-  return computeGraphLayout(nodes, edges).positionedNodes.map(
+export function persistNodePositions(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  groups?: GraphGroup[],
+) {
+  const fresh = nodes.map(({ x: _x, y: _y, ...node }) => node);
+  return computeGraphLayout(fresh, edges, groups).positionedNodes.map(
     ({ width: _w, height: _h, ...node }) => node,
   );
+}
+
+export function keepOrRelayout(
+  next: GraphNode[],
+  edges: GraphEdge[],
+  previous?: GraphNode[],
+  groups?: GraphGroup[],
+  previousEdges?: GraphEdge[],
+  previousGroups?: GraphGroup[],
+) {
+  const same =
+    previous &&
+    previousEdges &&
+    structureKey(next, edges, groups) ===
+      structureKey(previous, previousEdges, previousGroups);
+  if (same && previous.every(hasPosition)) {
+    const byId = new Map(previous.map((node) => [node.id, node]));
+    return next.map((node) => {
+      const old = byId.get(node.id);
+      return old && hasPosition(old) ? { ...node, x: old.x, y: old.y } : node;
+    });
+  }
+  return persistNodePositions(next, edges, groups);
+}
+
+function outboundFace(source: PositionedNode, target: PositionedNode): "n" | "s" | "e" | "w" {
+  const dx = target.x + target.width / 2 - (source.x + source.width / 2);
+  const dy = target.y + target.height / 2 - (source.y + source.height / 2);
+  if (Math.abs(dy) >= Math.abs(dx)) return dy >= 0 ? "s" : "n";
+  return dx >= 0 ? "e" : "w";
+}
+
+export function edgeLane(
+  edges: GraphEdge[],
+  index: number,
+  locate: (id: string) => PositionedNode | undefined,
+): number {
+  const edge = edges[index];
+  const source = locate(edge.source);
+  const target = locate(edge.target);
+  if (!source || !target) return 0;
+  const face = outboundFace(source, target);
+  const lanes = edges
+    .map((item, idx) => ({ item, idx }))
+    .filter(({ item }) => {
+      if (item.source !== edge.source) return false;
+      const other = locate(item.target);
+      return Boolean(other && outboundFace(source, other) === face);
+    });
+  const rank = lanes.findIndex(({ idx }) => idx === index);
+  return (rank === -1 ? 0 : rank) - (lanes.length - 1) / 2;
 }
 
 export function edgePath(
   source: PositionedNode,
   target: PositionedNode,
+  lane = 0,
 ): { d: string; labelX: number; labelY: number } {
   const sourceCx = source.x + source.width / 2;
   const sourceCy = source.y + source.height / 2;
@@ -173,6 +168,7 @@ export function edgePath(
   const targetCy = target.y + target.height / 2;
   const dx = targetCx - sourceCx;
   const dy = targetCy - sourceCy;
+  const spread = lane * 16;
 
   let startX: number;
   let startY: number;
@@ -184,25 +180,25 @@ export function edgePath(
   let c2y: number;
 
   if (Math.abs(dy) >= Math.abs(dx)) {
-    startX = sourceCx;
+    startX = sourceCx + spread;
     startY = dy > 0 ? source.y + source.height : source.y;
-    endX = targetCx;
+    endX = targetCx + spread;
     endY = dy > 0 ? target.y : target.y + target.height;
     const lift = Math.max(28, Math.abs(endY - startY) * 0.45);
-    c1x = startX;
+    c1x = startX + spread * 0.35;
     c1y = startY + (dy > 0 ? lift : -lift);
-    c2x = endX;
+    c2x = endX + spread * 0.35;
     c2y = endY + (dy > 0 ? -lift : lift);
   } else {
     startX = dx > 0 ? source.x + source.width : source.x;
-    startY = sourceCy;
+    startY = sourceCy + spread;
     endX = dx > 0 ? target.x : target.x + target.width;
-    endY = targetCy;
+    endY = targetCy + spread;
     const pull = Math.max(28, Math.abs(endX - startX) * 0.45);
     c1x = startX + (dx > 0 ? pull : -pull);
-    c1y = startY;
+    c1y = startY + spread * 0.35;
     c2x = endX + (dx > 0 ? -pull : pull);
-    c2y = endY;
+    c2y = endY + spread * 0.35;
   }
 
   return {

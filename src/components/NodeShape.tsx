@@ -8,12 +8,12 @@ interface NodeShapeProps {
   warning?: boolean;
 }
 
-function fill(accent: string, warning?: boolean) {
-  return withAlpha(accent, warning ? 0.28 : 0.16);
+function fill(_accent: string, warning?: boolean) {
+  return warning ? "rgba(36, 14, 14, 0.97)" : "rgba(28, 30, 36, 0.96)";
 }
 
 function stroke(accent: string, selected?: boolean) {
-  return selected ? accent : withAlpha(accent, 0.75);
+  return selected ? accent : withAlpha(accent, 0.82);
 }
 
 function Cylinder({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
