@@ -19,31 +19,33 @@ export function ColorStudio({
   onReset,
 }: ColorStudioProps) {
   return (
-    <div className="no-drag flex items-center gap-2 overflow-x-auto px-0.5">
+    <div className="no-drag flex flex-wrap items-center gap-1.5 overflow-hidden px-0.5">
       {NODE_TYPES.filter((type) => type !== "CUSTOM").map((type) => (
         <label
           key={type}
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2 py-1"
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-white/8 bg-[#0F1015]/90 px-2 py-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]"
           title={`Default ${type} color`}
         >
           <input
             type="color"
             value={palette[type]}
             onChange={(event) => onPaletteChange(type, event.target.value)}
-            className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
+            className="h-3 w-3 cursor-pointer border-0 bg-transparent p-0"
           />
-          <span className="font-mono text-[9px] text-white/55">{type}</span>
+          <span className="font-mono text-[9px] tracking-tight text-zinc-500">
+            {type}
+          </span>
         </label>
       ))}
       {selectedLabel && onSelectedColor && (
-        <label className="flex shrink-0 items-center gap-1.5 rounded-full border border-white/25 bg-white/10 px-2 py-1">
+        <label className="flex shrink-0 items-center gap-1.5 rounded-md border border-white/20 bg-white/[0.06] px-2 py-1">
           <input
             type="color"
             value={selectedColor ?? DEFAULT_PALETTE.CUSTOM}
             onChange={(event) => onSelectedColor(event.target.value)}
-            className="h-3.5 w-3.5 cursor-pointer border-0 bg-transparent p-0"
+            className="h-3 w-3 cursor-pointer border-0 bg-transparent p-0"
           />
-          <span className="max-w-[110px] truncate font-mono text-[9px] text-white">
+          <span className="max-w-[110px] truncate font-mono text-[9px] tracking-tight text-zinc-200">
             {selectedLabel}
           </span>
         </label>
@@ -51,7 +53,7 @@ export function ColorStudio({
       <button
         type="button"
         onClick={onReset}
-        className="shrink-0 text-[10px] text-white/35 hover:text-white/70"
+        className="shrink-0 font-mono text-[10px] tracking-tight text-zinc-600 hover:text-zinc-300"
       >
         Reset
       </button>

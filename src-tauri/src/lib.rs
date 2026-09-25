@@ -1,5 +1,61 @@
-use tauri::{AppHandle, Manager, PhysicalPosition, WindowEvent};
+use std::time::Duration;
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+fn work_area_logical(window: &WebviewWindow) -> (f64, f64) {
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let work = monitor.work_area();
+        let scale = monitor.scale_factor();
+        (
+            work.size.width as f64 / scale,
+            work.size.height as f64 / scale,
+        )
+    } else {
+        (1512.0, 982.0)
+    }
+}
+
+fn target_for_mode(window: &WebviewWindow, mode: &str) -> (f64, f64) {
+    let (work_w, work_h) = work_area_logical(window);
+    match mode {
+        "board" => (
+            (work_w * 0.62).clamp(960.0, 1180.0),
+            (work_h * 0.64).clamp(620.0, 760.0),
+        ),
+        _ => (680.0, 520.0),
+    }
+}
+
+fn animate_window_to(window: WebviewWindow, target_w: f64, target_h: f64) {
+    std::thread::spawn(move || {
+        let Ok(start) = window.outer_size() else { return };
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let from_w = start.width as f64 / scale;
+        let from_h = start.height as f64 / scale;
+        let Ok(pos) = window.outer_position() else { return };
+        let cx = pos.x as f64 + start.width as f64 / 2.0;
+        let cy = pos.y as f64 + start.height as f64 / 2.0;
+        const STEPS: i32 = 16;
+        for step in 1..=STEPS {
+            let t = step as f64 / STEPS as f64;
+            let e = 1.0 - (1.0 - t).powi(4);
+            let width = from_w + (target_w - from_w) * e;
+            let height = from_h + (target_h - from_h) * e;
+            let _ = window.set_size(LogicalSize::new(width, height));
+            let _ = window.set_position(PhysicalPosition::new(
+                (cx - width * scale / 2.0) as i32,
+                (cy - height * scale / 2.0) as i32,
+            ));
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    });
+}
+
+#[tauri::command]
+fn set_hud_mode(window: WebviewWindow, mode: String) {
+    let (width, height) = target_for_mode(&window, &mode);
+    animate_window_to(window, width, height);
+}
 
 fn toggle_overlay(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -36,6 +92,7 @@ pub fn run() {
                 })
                 .build(),
         )
+        .invoke_handler(tauri::generate_handler![set_hud_mode])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));

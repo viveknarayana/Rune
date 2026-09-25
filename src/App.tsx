@@ -1,9 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ColorStudio } from "./components/ColorStudio";
 import { CommandBar } from "./components/CommandBar";
 import { GlassCanvas } from "./components/GlassCanvas";
 import { LatencyHud } from "./components/LatencyHud";
+import { PatternStack } from "./components/PatternStack";
 import { ServiceStack } from "./components/ServiceStack";
 import {
   searchAwsServices,
@@ -16,36 +18,60 @@ import {
   savePalette,
   type ColorPalette,
 } from "./lib/colors";
-import { computeGraphLayout, persistNodePositions } from "./lib/layout-engine";
+import { resizeHud, useHudSize } from "./lib/hud-window";
+import { isExplicitRebuild } from "./lib/graph-actions";
+import {
+  cloneResult,
+  graphSignature,
+  isClearCommand,
+  isRedoCommand,
+  isUndoCommand,
+} from "./lib/graph-history";
+import { computeGraphLayout, keepOrRelayout } from "./lib/layout-engine";
+import { parsePromptSteps } from "./lib/mutations";
 import { applyTheme } from "./lib/themes";
 import type { CanvasState, CompilerResult, NodeTypeName } from "./lib/types";
+import { applyMutation } from "./lib/mutations";
 import {
   compileLocal,
   evaluateJevSystemDesign,
 } from "./services/jev-service";
+import type { NodeMenuAction } from "./components/NodeMenu";
 
 function lockPositions(
   result: CompilerResult,
   previous?: CompilerResult | null,
 ): CompilerResult {
-  const keep =
-    result.action === "MUTATE_GRAPH" || result.action === "SIMULATE_OUTAGE";
-  const nodes = result.nodes.map((node) => {
-    if (!keep) {
-      const { x: _x, y: _y, ...rest } = node;
-      return rest;
-    }
-    const old = previous?.nodes.find((item) => item.id === node.id);
-    if (old?.x != null && old.y != null) {
-      return { ...node, x: old.x, y: old.y };
-    }
-    const { x: _nx, y: _ny, ...rest } = node;
-    return rest;
-  });
   return {
     ...result,
-    nodes: persistNodePositions(nodes, result.edges),
+    nodes: keepOrRelayout(
+      result.nodes,
+      result.edges,
+      previous?.nodes,
+      result.groups,
+      previous?.edges,
+      previous?.groups,
+    ),
   };
+}
+
+function adoptResult(
+  next: CompilerResult,
+  previous: CompilerResult | null | undefined,
+  prompt: string,
+): CompilerResult {
+  if (!previous?.nodes.length) return lockPositions(next, previous);
+  if (isExplicitRebuild(prompt)) return lockPositions(next, null);
+
+  const prevIds = new Set(previous.nodes.map((node) => node.id));
+  const kept = next.nodes.filter((node) => prevIds.has(node.id)).length;
+  const lost = previous.nodes.length - kept;
+  const removes = parsePromptSteps(prompt).filter((step) => step.kind === "remove").length;
+  if (lost > removes && lost >= Math.max(2, Math.ceil(previous.nodes.length / 2))) {
+    return previous;
+  }
+
+  return lockPositions(next, previous);
 }
 
 export default function App() {
@@ -56,8 +82,17 @@ export default function App() {
   const [fps, setFps] = useState(120);
   const [palette, setPalette] = useState<ColorPalette>(DEFAULT_PALETTE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [linkingFrom, setLinkingFrom] = useState<string | null>(null);
   const [stack, setStack] = useState<AwsService[]>(() => searchAwsServices(""));
   const [jevBoosted, setJevBoosted] = useState(false);
+  const [historyTick, setHistoryTick] = useState(0);
+  const decisionRef = useRef<CompilerResult | null>(null);
+  const pastRef = useRef<(CompilerResult | null)[]>([]);
+  const futureRef = useRef<(CompilerResult | null)[]>([]);
+  const compileGen = useRef(0);
+  decisionRef.current = decision;
+  const canUndo = historyTick >= 0 && pastRef.current.length > 0;
+  const canRedo = historyTick >= 0 && futureRef.current.length > 0;
 
   useEffect(() => {
     setPalette(loadPalette());
@@ -72,7 +107,13 @@ export default function App() {
   );
 
   const hasBoard = Boolean(decision?.nodes.length);
+  const hudMode = hasBoard ? "board" : "idle";
+  const hudSize = useHudSize(hudMode);
   const selected = decision?.nodes.find((n) => n.id === selectedId);
+
+  useEffect(() => {
+    void resizeHud(hudMode);
+  }, [hudMode]);
 
   useEffect(() => {
     if (decision) applyTheme(decision.theme_mode);
@@ -101,7 +142,7 @@ export default function App() {
 
   useEffect(() => {
     const query = prompt.trim();
-    const local = searchAwsServices(query);
+    const local = searchAwsServices(query, query ? 36 : 12);
     setStack(local);
     setJevBoosted(false);
     if (!query) return;
@@ -120,6 +161,137 @@ export default function App() {
     return () => window.clearTimeout(handle);
   }, [prompt]);
 
+  const commitDecision = useCallback(
+    (updater: (prev: CompilerResult | null) => CompilerResult | null) => {
+      setDecision((prev) => {
+        const next = updater(prev);
+        if (graphSignature(prev) === graphSignature(next)) return prev;
+        pastRef.current = [
+          ...pastRef.current.slice(-39),
+          prev ? cloneResult(prev) : null,
+        ];
+        futureRef.current = [];
+        queueMicrotask(() => setHistoryTick((tick) => tick + 1));
+        return next;
+      });
+    },
+    [],
+  );
+
+  const undo = useCallback(() => {
+    if (!pastRef.current.length) return;
+    const prior = pastRef.current[pastRef.current.length - 1];
+    pastRef.current = pastRef.current.slice(0, -1);
+    const current = decisionRef.current;
+    futureRef.current = [...futureRef.current, current ? cloneResult(current) : null];
+    setDecision(prior);
+    setHistoryTick((tick) => tick + 1);
+  }, []);
+
+  const clearBoard = useCallback(() => {
+    compileGen.current += 1;
+    setCompiling(false);
+    commitDecision((prev) => (prev?.nodes.length ? null : prev));
+    setSelectedId(null);
+    setLinkingFrom(null);
+  }, [commitDecision]);
+
+  const redo = useCallback(() => {
+    if (!futureRef.current.length) return;
+    const next = futureRef.current[futureRef.current.length - 1];
+    futureRef.current = futureRef.current.slice(0, -1);
+    const current = decisionRef.current;
+    pastRef.current = [...pastRef.current, current ? cloneResult(current) : null];
+    setDecision(next);
+    setHistoryTick((tick) => tick + 1);
+  }, []);
+
+  const patchGraph = useCallback(
+    (next: CanvasState, step: string) => {
+      commitDecision((prev) => {
+        if (!prev) return prev;
+        const anomaly = next.nodes.some((n) => n.label.includes("OUTAGE"));
+        return lockPositions(
+          {
+            ...prev,
+            ...next,
+            is_anomaly: anomaly,
+            action: "MUTATE_GRAPH",
+            source: "local",
+            steps: [...prev.steps, step],
+          },
+          prev,
+        );
+      });
+    },
+    [commitDecision],
+  );
+
+  const handleNodeAction = useCallback(
+    (id: string, action: NodeMenuAction) => {
+      if (!decision) return;
+      const state: CanvasState = {
+        nodes: decision.nodes,
+        edges: decision.edges,
+        groups: decision.groups ?? [],
+      };
+      if (action.type === "remove") {
+        patchGraph(applyMutation(state, { kind: "remove", target: id }), `remove ${id}`);
+        setSelectedId((current) => (current === id ? null : current));
+        setLinkingFrom((current) => (current === id ? null : current));
+        return;
+      }
+      if (action.type === "outage") {
+        const node = decision.nodes.find((n) => n.id === id);
+        if (node?.label.includes("OUTAGE")) {
+          patchGraph(
+            {
+              ...state,
+              nodes: state.nodes.map((n) =>
+                n.id === id
+                  ? { ...n, label: n.label.replace(/\s*·\s*OUTAGE$/, "") }
+                  : n,
+              ),
+            },
+            `recover ${id}`,
+          );
+          return;
+        }
+        patchGraph(applyMutation(state, { kind: "outage", target: id }), `outage ${id}`);
+        return;
+      }
+      if (action.type === "color") {
+        patchGraph(
+          applyMutation(state, { kind: "color", target: id, color: action.color }),
+          `color ${id}`,
+        );
+        return;
+      }
+      setLinkingFrom((current) => (current === id ? null : id));
+    },
+    [decision, patchGraph],
+  );
+
+  const handleConnectNodes = useCallback(
+    (source: string, target: string) => {
+      if (!decision) return;
+      patchGraph(
+        applyMutation(
+          {
+            nodes: decision.nodes,
+            edges: decision.edges,
+            groups: decision.groups ?? [],
+          },
+          { kind: "connect", source, target },
+        ),
+        `connect ${source} ${target}`,
+      );
+      setLinkingFrom(null);
+      setSelectedId(target);
+    },
+    [decision, patchGraph],
+  );
+
   const moveNode = useCallback((id: string, x: number, y: number) => {
     setDecision((prev) =>
       prev
@@ -137,6 +309,21 @@ export default function App() {
     async (nextPrompt?: string) => {
       const value = (nextPrompt ?? prompt).trim();
       if (!value) return;
+      if (isUndoCommand(value)) {
+        undo();
+        setPrompt("");
+        return;
+      }
+      if (isRedoCommand(value)) {
+        redo();
+        setPrompt("");
+        return;
+      }
+      if (isClearCommand(value)) {
+        clearBoard();
+        setPrompt("");
+        return;
+      }
 
       const currentState: CanvasState | undefined = decision
         ? {
@@ -145,23 +332,41 @@ export default function App() {
             groups: decision.groups ?? [],
           }
         : undefined;
-      setDecision((prev) => lockPositions(compileLocal(value, currentState), prev));
+      const gen = (compileGen.current += 1);
+      commitDecision((prev) =>
+        adoptResult(compileLocal(value, currentState, selectedId ?? undefined), prev, value),
+      );
       setCompiling(true);
 
       try {
-        const payload = await evaluateJevSystemDesign(value, currentState);
-        setDecision((prev) =>
-          lockPositions({ ...payload, groups: payload.groups ?? [] }, prev),
+        const payload = await evaluateJevSystemDesign(value, currentState, {
+          anchor: selectedId ?? undefined,
+        });
+        if (gen !== compileGen.current) return;
+        commitDecision((prev) =>
+          adoptResult({ ...payload, groups: payload.groups ?? [] }, prev, value),
         );
       } finally {
-        setCompiling(false);
+        if (gen === compileGen.current) setCompiling(false);
       }
     },
-    [prompt, decision],
+    [prompt, decision, selectedId, commitDecision, undo, redo, clearBoard],
   );
 
   useEffect(() => {
     const onKey = async (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && key === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
       if (event.key === "Escape") {
         try {
           await getCurrentWindow().hide();
@@ -172,7 +377,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [undo, redo]);
 
   function updatePalette(type: NodeTypeName, color: string) {
     const next = { ...palette, [type]: color };
@@ -180,81 +385,159 @@ export default function App() {
     savePalette(next);
   }
 
+  const inTauri = "__TAURI_INTERNALS__" in window;
+
   return (
-    <div className="hud-shell flex h-full min-h-0 flex-col overflow-hidden rounded-[24px] border border-white/12 bg-zinc-950/35 px-4 pt-3 pb-3 shadow-[0_30px_90px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
-      <div id="titlebar" className="mb-1 flex items-center justify-between">
-        <p className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">
-          Rune
-        </p>
-        <LatencyHud
-          jevMs={decision?.execution_time_ms ?? 0}
-          dagreMs={layout.layoutMs}
-          fps={fps}
-          source={decision?.source ?? "local"}
-        />
-      </div>
-      <CommandBar
-        prompt={prompt}
-        compiling={compiling}
-        steps={hasBoard ? decision?.steps : undefined}
-        showPresets={hasBoard}
-        onPromptChange={setPrompt}
-        onCompile={compile}
-        inputRef={inputRef}
-      />
+    <div
+      className={
+        inTauri
+          ? "h-full w-full"
+          : "flex h-full w-full items-center justify-center"
+      }
+    >
+    <motion.div
+      className={`hud-shell surface flex min-h-0 overflow-hidden rounded-2xl ${
+        hasBoard ? "flex-row" : "flex-col"
+      }`}
+      initial={false}
+      animate={
+        inTauri
+          ? { width: "100%", height: "100%" }
+          : { width: hudSize.width, height: hudSize.height }
+      }
+      transition={{ type: "spring", stiffness: 170, damping: 24, mass: 0.8 }}
+    >
+      <div
+        className={`flex min-h-0 flex-col ${
+          hasBoard ? "w-[268px] shrink-0 border-r border-white/8" : "min-w-0 flex-1"
+        }`}
+      >
+        <div id="titlebar" className="flex items-center justify-between px-3 pt-3 pb-2">
+          <p className="font-mono text-[11px] tracking-[0.22em] text-zinc-500 uppercase">
+            Rune
+          </p>
+          <div className="no-drag flex items-center gap-2">
+            <button
+              type="button"
+              disabled={!canUndo}
+              onClick={undo}
+              className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              disabled={!canRedo}
+              onClick={redo}
+              className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
+            >
+              Redo
+            </button>
+            <button
+              type="button"
+              disabled={!hasBoard}
+              onClick={clearBoard}
+              className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-red-300 disabled:opacity-25"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
 
-      <div className={`mt-2 ${hasBoard ? "" : "min-h-0 flex-1"}`}>
-        <ServiceStack
-          services={stack}
-          query={prompt}
-          jevBoosted={jevBoosted}
-          expanded={!hasBoard}
-          onPick={(service) => {
-            setPrompt(`Add ${service.label}`);
-            void compile(`Add ${service.label}`);
-          }}
-        />
-      </div>
+        <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">
+          <CommandBar
+            prompt={prompt}
+            compiling={compiling}
+            canUndo={canUndo}
+            onPromptChange={setPrompt}
+            onCompile={compile}
+            onUndo={undo}
+            inputRef={inputRef}
+          />
 
-      {hasBoard && (
-      <div className="mt-2">
-      <ColorStudio
-        palette={palette}
-        selectedLabel={selected?.label}
-        selectedColor={selected?.color}
-        onPaletteChange={updatePalette}
-        onSelectedColor={(color) => {
-          if (!decision || !selectedId) return;
-          setDecision({
-            ...decision,
-            nodes: decision.nodes.map((n) =>
-              n.id === selectedId ? { ...n, color } : n,
-            ),
-          });
-        }}
-        onReset={() => {
-          setPalette(DEFAULT_PALETTE);
-          savePalette(DEFAULT_PALETTE);
-        }}
-      />
+          {hasBoard && decision?.steps && decision.steps.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {decision.steps.map((step, index) => (
+                <span
+                  key={`${step}-${index}`}
+                  className="rounded-md border border-white/8 px-1.5 py-0.5 font-mono text-[9px] tracking-tight text-zinc-500"
+                >
+                  {index + 1}. {step}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 min-h-0 flex-1">
+            <PatternStack
+              rail={hasBoard}
+              onPick={(pattern) => {
+                void compile(`Apply ${pattern.id}`).then(() => setPrompt(""));
+              }}
+            />
+            <ServiceStack
+              services={stack}
+              query={prompt}
+              jevBoosted={jevBoosted}
+              expanded={!hasBoard}
+              rail={hasBoard}
+              onPick={(service) => {
+                void compile(`Add ${service.label}`).then(() => setPrompt(""));
+              }}
+            />
+          </div>
+        </div>
       </div>
-      )}
 
       {hasBoard && decision && (
-      <div className="mt-3 min-h-0 flex-1">
-          <GlassCanvas
-            nodes={layout.positionedNodes}
-            edges={layout.edges}
-            groups={decision.groups ?? []}
-            isAnomaly={decision.is_anomaly}
-            stiffness={decision.stiffness}
-            palette={palette}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onNodeMove={moveNode}
-          />
-      </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3 pb-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <ColorStudio
+              palette={palette}
+              selectedLabel={selected?.label}
+              selectedColor={selected?.color}
+              onPaletteChange={updatePalette}
+              onSelectedColor={(color) => {
+                if (!selectedId) return;
+                commitDecision((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        nodes: prev.nodes.map((node) =>
+                          node.id === selectedId ? { ...node, color } : node,
+                        ),
+                      }
+                    : prev,
+                );
+              }}
+              onReset={clearBoard}
+            />
+            <LatencyHud
+              jevMs={decision.execution_time_ms}
+              dagreMs={layout.layoutMs}
+              fps={fps}
+              source={decision.source}
+            />
+          </div>
+          <div className="min-h-0 flex-1">
+            <GlassCanvas
+              nodes={layout.positionedNodes}
+              edges={layout.edges}
+              groups={decision.groups ?? []}
+              isAnomaly={decision.is_anomaly}
+              stiffness={decision.stiffness}
+              palette={palette}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onNodeMove={moveNode}
+              linkingFrom={linkingFrom}
+              onNodeAction={handleNodeAction}
+              onConnectNodes={handleConnectNodes}
+            />
+          </div>
+        </div>
       )}
+    </motion.div>
     </div>
   );
 }

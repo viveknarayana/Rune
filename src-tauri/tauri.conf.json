@@ -15,8 +15,8 @@
       {
         "label": "main",
         "title": "Rune",
-        "width": 880,
-        "height": 760,
+        "width": 680,
+        "height": 520,
         "resizable": false,
         "decorations": false,
         "transparent": true,

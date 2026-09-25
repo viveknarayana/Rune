@@ -1,29 +1,22 @@
 import type { FormEvent, RefObject } from "react";
 
-const PRESETS = [
-  "SaaS API with auth and a database",
-  "Add IAM component, and connect to identity. Square IAM and Identity",
-  'Add "Route 53" then connect to the API gateway',
-  "Group app and database as VPC",
-];
-
 interface CommandBarProps {
   prompt: string;
   compiling: boolean;
-  steps?: string[];
-  showPresets?: boolean;
+  canUndo?: boolean;
   onPromptChange: (value: string) => void;
   onCompile: (value?: string) => void;
+  onUndo?: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 }
 
 export function CommandBar({
   prompt,
   compiling,
-  steps,
-  showPresets = true,
+  canUndo,
   onPromptChange,
   onCompile,
+  onUndo,
   inputRef,
 }: CommandBarProps) {
   function handleSubmit(event: FormEvent) {
@@ -32,57 +25,43 @@ export function CommandBar({
   }
 
   return (
-    <div className="no-drag rounded-2xl border border-white/12 bg-black/25 p-3 backdrop-blur-xl">
-      <form onSubmit={handleSubmit} className="flex items-center gap-2">
-        <div className="hidden items-center gap-1 rounded-lg border border-white/10 px-2 py-1 font-mono text-[10px] text-white/55 sm:flex">
-          <kbd>⌘</kbd>
-          <kbd>⇧</kbd>
-          <kbd>J</kbd>
-        </div>
+    <form onSubmit={handleSubmit} className="no-drag">
+      <div className="flex items-center gap-2 rounded-full border border-white/8 bg-[#14151A] px-3 py-1.5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]">
+        <span className="font-mono text-[10px] tracking-tight text-zinc-600">
+          ⌘⇧J
+        </span>
         <input
           ref={inputRef}
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
-          placeholder="Type lambda, s3, iam… cards lift from the stack"
-          className="min-w-0 flex-1 bg-transparent px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35"
+          placeholder="Search or undo…"
+          className="min-w-0 flex-1 bg-transparent py-1 text-[13px] tracking-tight text-zinc-100 outline-none placeholder:text-zinc-600"
         />
+        {prompt && (
+          <button
+            type="button"
+            onClick={() => onPromptChange("")}
+            className="font-mono text-[10px] tracking-tight text-zinc-600 hover:text-zinc-300"
+          >
+            Clear
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!canUndo}
+          onClick={onUndo}
+          className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
+        >
+          Undo
+        </button>
         <button
           type="submit"
           disabled={compiling || !prompt.trim()}
-          className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-zinc-900 disabled:opacity-40"
+          className="rounded-full bg-zinc-100 px-2.5 py-1 text-[10px] font-medium tracking-tight text-zinc-950 disabled:opacity-30"
         >
-          {compiling ? "Running…" : "Run"}
+          {compiling ? "…" : "Run"}
         </button>
-      </form>
-      {showPresets && (
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {PRESETS.map((preset) => (
-          <button
-            key={preset}
-            type="button"
-            onClick={() => {
-              onPromptChange(preset);
-              onCompile(preset);
-            }}
-            className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/75 hover:border-white/30 hover:text-white"
-          >
-            {preset}
-          </button>
-        ))}
       </div>
-      )}
-      {steps && steps.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {steps.map((step, index) => (
-            <span
-              key={`${step}-${index}`}
-              className="rounded-full bg-white/8 px-2 py-0.5 font-mono text-[10px] text-white/65"
-            >
-              {index + 1}. {step}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
+    </form>
   );
 }
