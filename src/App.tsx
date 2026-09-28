@@ -154,8 +154,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    inputRef.current?.focus({ preventScroll: true });
+  }, [hasBoard]);
 
   useEffect(() => {
     const query = prompt.trim();
@@ -429,17 +429,53 @@ export default function App() {
           // Browser preview has no Tauri window.
         }
       }
+      const target = event.target as HTMLElement | null;
+      const inField =
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        Boolean(target?.closest(".node-inspector"));
+
       if (event.key === "Backspace" || event.key === "Delete") {
-        const tag = (event.target as HTMLElement)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (inField) return;
         if (selectedEdge) {
           event.preventDefault();
           handleDisconnect(selectedEdge.source, selectedEdge.target);
+          return;
         }
+        if (event.key === "Backspace") {
+          event.preventDefault();
+          setPrompt((value) => value.slice(0, -1));
+          inputRef.current?.focus({ preventScroll: true });
+        }
+        return;
+      }
+
+      if (
+        !inField &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key.length === 1
+      ) {
+        event.preventDefault();
+        setPrompt((value) => value + event.key);
+        inputRef.current?.focus({ preventScroll: true });
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onPointerUp = () => {
+      window.requestAnimationFrame(() => {
+        const active = document.activeElement as HTMLElement | null;
+        if (active?.closest(".node-inspector")) return;
+        if (active instanceof HTMLInputElement && active.type === "color") return;
+        inputRef.current?.focus({ preventScroll: true });
+      });
+    };
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
   }, [undo, redo, selectedId, selectedEdge, linkingFrom, handleDisconnect]);
 
   function updatePalette(type: NodeTypeName, color: string) {
@@ -455,7 +491,7 @@ export default function App() {
       className={
         inTauri
           ? "h-full w-full"
-          : "flex h-full w-full items-center justify-center"
+          : "flex h-full w-full items-start justify-center pt-[4vh]"
       }
     >
     <motion.div

@@ -163,6 +163,19 @@ button {
   filter: none;
 }
 
+.pile-canvas .tile-face {
+  transform: scale(1);
+  transition: transform 0.16s ease;
+}
+
+.pile-canvas button.is-held {
+  z-index: 40;
+}
+
+.pile-canvas button.is-held .tile-face {
+  transform: scale(1.14);
+}
+
 .dot-grid {
   background-color: rgba(18, 19, 24, 0.94);
   background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);

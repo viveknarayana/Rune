@@ -5,7 +5,7 @@ import { AWS_SERVICES, type AwsService } from "../lib/aws-catalog";
 const TILE = 68;
 const ICON = 44;
 const HIT = 38;
-const LERP = 0.16;
+const FLY = "transform 0.55s cubic-bezier(0.16, 1, 0.3, 1)";
 const { Engine, Bodies, Composite, Body } = Matter;
 
 const CATEGORY_COLOR: Record<AwsService["category"], string> = {
@@ -40,7 +40,6 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
   const parkedRef = useRef(new Map<string, Pose>());
   const activeRef = useRef(new Set<string>());
   const hoverRef = useRef<string | null>(null);
-  const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
   const spawnedRef = useRef(false);
   const wallsRef = useRef<Matter.Body[]>([]);
@@ -48,6 +47,22 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
   const pickRef = useRef(onPick);
   pickRef.current = onPick;
   activeRef.current = new Set(activeIds);
+
+  const hitDom = (clientX: number, clientY: number) => {
+    let best: string | null = null;
+    let bestDist = HIT * HIT;
+    for (const [id, node] of nodesRef.current) {
+      const box = node.getBoundingClientRect();
+      const dx = box.left + box.width / 2 - clientX;
+      const dy = box.top + box.height / 2 - clientY;
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = id;
+      }
+    }
+    return best;
+  };
 
   useLayoutEffect(() => {
     const root = containerRef.current;
@@ -140,32 +155,21 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
     });
     ro.observe(root);
 
-    const hitAt = (x: number, y: number) => {
-      let best: string | null = null;
-      let bestDist = HIT * HIT;
-      for (const [id, pose] of visualRef.current) {
-        const dx = pose.x - x;
-        const dy = pose.y - y;
-        const dist = dx * dx + dy * dy;
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = id;
-        }
-      }
-      return best;
-    };
-
-    const paint = (id: string, pose: Pose, scale: number, z: string) => {
+    const paint = (id: string, pose: Pose, z: string, flying: boolean, delay = 0) => {
       const node = nodesRef.current.get(id);
       if (!node) return;
-      node.style.transform = `translate3d(${pose.x - TILE / 2}px, ${pose.y - TILE / 2}px, 0) rotate(${pose.a}rad) scale(${scale})`;
+      node.style.transition = flying ? FLY : "none";
+      node.style.transitionDelay = flying ? `${delay}ms` : "0ms";
+      node.style.transform = `translate3d(${pose.x - TILE / 2}px, ${pose.y - TILE / 2}px, 0) rotate(${pose.a}rad)`;
       node.style.zIndex = z;
     };
 
     let physicsLive = true;
     let still = 0;
     let lastHover: string | null = null;
+    let lastHeld: string | null = null;
     let lastSearch = false;
+    let lastActiveKey = "";
     let frame = 0;
 
     const tick = () => {
@@ -174,10 +178,8 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
       const searching = active.size > 0;
       const slots = [...active];
       const cols = Math.min(6, Math.max(1, slots.length));
-      const gap = 14;
+      const gap = 16;
       const originX = w / 2 - (cols * TILE + (cols - 1) * gap) / 2 + TILE / 2;
-      const pointer = pointerRef.current;
-      hoverRef.current = pointer ? hitAt(pointer.x, pointer.y) : null;
       const hover = hoverRef.current;
 
       if (searching !== lastSearch) {
@@ -192,6 +194,7 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
           const pose = { x: body.position.x, y: body.position.y, a: body.angle };
           visualRef.current.set(id, pose);
           parkedRef.current.set(id, pose);
+          paint(id, pose, "12", false);
           if (
             !body.isSleeping &&
             Math.abs(body.velocity.x) + Math.abs(body.velocity.y) > 0.12
@@ -203,52 +206,44 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
         if (still > 24) physicsLive = false;
       }
 
-      for (const service of AWS_SERVICES) {
-        const magnet = active.has(service.id);
-        const held = hover === service.id;
-        const node = nodesRef.current.get(service.id);
-        let pose = visualRef.current.get(service.id);
-        if (!pose || !node) continue;
-
-        if (magnet) {
-          const slot = Math.max(0, slots.indexOf(service.id));
-          const tx = originX + (slot % cols) * (TILE + gap);
-          const ty = 40 + Math.floor(slot / cols) * (TILE + 16);
-          pose = {
-            x: pose.x + (tx - pose.x) * LERP,
-            y: pose.y + (ty - pose.y) * LERP,
-            a: pose.a * 0.78,
-          };
-          visualRef.current.set(service.id, pose);
-          node.classList.add("is-magnet");
-          paint(service.id, pose, held ? 1.16 : 1.08, held ? "50" : "30");
-        } else {
-          const home = parkedRef.current.get(service.id) ?? pose;
-          const dx = home.x - pose.x;
-          const dy = home.y - pose.y;
-          if (dx * dx + dy * dy > 0.4 || Math.abs(home.a - pose.a) > 0.01) {
-            pose = {
-              x: pose.x + dx * LERP,
-              y: pose.y + dy * LERP,
-              a: pose.a + (home.a - pose.a) * LERP,
+      const activeKey = slots.join("\0");
+      if (activeKey !== lastActiveKey) {
+        lastActiveKey = activeKey;
+        AWS_SERVICES.forEach((service) => {
+          const node = nodesRef.current.get(service.id);
+          if (!node) return;
+          const magnet = active.has(service.id);
+          if (magnet) {
+            const slot = Math.max(0, slots.indexOf(service.id));
+            const pose = {
+              x: originX + (slot % cols) * (TILE + gap),
+              y: 44 + Math.floor(slot / cols) * (TILE + 18),
+              a: 0,
             };
             visualRef.current.set(service.id, pose);
-          } else if (pose !== home) {
-            pose = home;
-            visualRef.current.set(service.id, pose);
+            node.classList.add("is-magnet");
+            paint(service.id, pose, "30", true, slot * 28);
+          } else {
+            const home = parkedRef.current.get(service.id);
+            if (home) visualRef.current.set(service.id, home);
+            node.classList.remove("is-magnet");
+            if (home) paint(service.id, home, "12", true);
           }
-          node.classList.remove("is-magnet");
-          paint(service.id, pose, held ? 1.18 : 1, held ? "50" : "12");
-        }
-        node.classList.toggle("is-held", held);
+        });
+      }
+
+      if (hover !== lastHeld) {
+        if (lastHeld) nodesRef.current.get(lastHeld)?.classList.remove("is-held");
+        if (hover) nodesRef.current.get(hover)?.classList.add("is-held");
+        lastHeld = hover;
       }
 
       const tip = tipRef.current;
       if (tip) {
         if (hover) {
           const service = AWS_SERVICES.find((item) => item.id === hover);
-          const pose = visualRef.current.get(hover);
-          if (service && pose) {
+          const node = nodesRef.current.get(hover);
+          if (service && node) {
             if (lastHover !== hover) {
               tip.replaceChildren();
               const name = document.createElement("span");
@@ -258,14 +253,14 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
               tip.append(name, cat);
               lastHover = hover;
             }
-            const below = pose.y < 56;
+            const box = node.getBoundingClientRect();
+            const frame = root.getBoundingClientRect();
+            const x = box.left + box.width / 2 - frame.left;
+            const y = box.top - frame.top;
+            const below = y < 56;
             tip.style.opacity = "1";
-            tip.style.left = `${Math.min(w - 12, Math.max(12, pose.x))}px`;
-            tip.style.top = `${
-              below
-                ? Math.min(h - 8, pose.y + TILE / 2 + 8)
-                : Math.max(8, pose.y - TILE / 2 - 8)
-            }px`;
+            tip.style.left = `${Math.min(w - 12, Math.max(12, x))}px`;
+            tip.style.top = `${below ? Math.min(h - 8, y + box.height + 8) : Math.max(8, y - 8)}px`;
             tip.style.transform = below
               ? "translate(-50%, 0)"
               : "translate(-50%, -100%)";
@@ -305,35 +300,15 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
         ref={containerRef}
         className="pile-canvas no-drag relative isolate z-20 min-h-[260px] w-full flex-1 cursor-pointer overflow-hidden rounded-xl"
         onPointerMove={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          pointerRef.current = {
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top,
-          };
+          hoverRef.current = hitDom(event.clientX, event.clientY);
         }}
         onPointerLeave={() => {
-          pointerRef.current = null;
           hoverRef.current = null;
         }}
+        onMouseDown={(event) => event.preventDefault()}
         onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          const id = hoverRef.current;
-          const fallbackX = event.clientX - rect.left;
-          const fallbackY = event.clientY - rect.top;
-          let best: string | null = id;
-          if (!best) {
-            let bestDist = HIT * HIT;
-            for (const [key, pose] of visualRef.current) {
-              const dx = pose.x - fallbackX;
-              const dy = pose.y - fallbackY;
-              const dist = dx * dx + dy * dy;
-              if (dist < bestDist) {
-                bestDist = dist;
-                best = key;
-              }
-            }
-          }
-          const service = AWS_SERVICES.find((item) => item.id === best);
+          const id = hoverRef.current ?? hitDom(event.clientX, event.clientY);
+          const service = AWS_SERVICES.find((item) => item.id === id);
           if (service) pickRef.current(service);
         }}
       >
@@ -355,6 +330,7 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
               transform: `translate3d(${16 + (index % 8) * (TILE + 10)}px, ${20 + (index % 5) * 22}px, 0)`,
             }}
           >
+            <span className="tile-face pointer-events-none flex h-full w-full items-center justify-center">
             <img
               src={service.icon}
               alt=""
@@ -363,6 +339,7 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
               className="pointer-events-none h-[44px] w-[44px] object-contain"
               draggable={false}
             />
+            </span>
           </button>
         ))}
         <div

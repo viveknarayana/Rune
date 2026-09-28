@@ -43,6 +43,15 @@ export function CommandBar({
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
           placeholder={luminous ? "Describe a system, or search AWS…" : "Search AWS…"}
+          autoFocus
+          onBlur={() => {
+            window.requestAnimationFrame(() => {
+              const active = document.activeElement as HTMLElement | null;
+              if (active?.closest(".node-inspector")) return;
+              if (active instanceof HTMLInputElement && active.type === "color") return;
+              inputRef.current?.focus({ preventScroll: true });
+            });
+          }}
           className={`min-w-0 flex-1 bg-transparent py-1 text-[13px] tracking-tight outline-none ${
             luminous
               ? "text-zinc-50 placeholder:text-sky-100/35"
@@ -52,6 +61,7 @@ export function CommandBar({
         {prompt && (
           <button
             type="button"
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPromptChange("")}
             className="font-mono text-[10px] tracking-tight text-zinc-600 hover:text-zinc-300"
           >
@@ -60,6 +70,7 @@ export function CommandBar({
         )}
         <button
           type="submit"
+          onMouseDown={(event) => event.preventDefault()}
           disabled={compiling || !prompt.trim()}
           className="rounded-full bg-zinc-100 px-2.5 py-1 text-[10px] font-medium tracking-tight text-zinc-950 disabled:opacity-30"
         >

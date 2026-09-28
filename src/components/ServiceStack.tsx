@@ -66,6 +66,7 @@ export function ServiceStack({
                 key={service.id}
                 layout
                 type="button"
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onPick(service)}
                 initial={{ opacity: 0, scale: 0.78, y: 18 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}

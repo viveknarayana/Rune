@@ -8,34 +8,43 @@ interface PatternStackProps {
 
 export function PatternStack({ rail, luminous, onPick }: PatternStackProps) {
   return (
-    <div className="no-drag mb-3">
+    <div className={`no-drag ${rail ? "mb-3" : "mb-4"}`}>
       <p
-        className={`mb-1.5 px-0.5 font-mono text-[10px] tracking-[0.18em] uppercase ${
-          luminous ? "text-sky-100/40" : "text-zinc-600"
-        }`}
+        className={`mb-2 px-0.5 font-mono tracking-[0.18em] uppercase ${
+          rail ? "text-[10px]" : "text-[11px]"
+        } ${luminous ? "text-sky-100/40" : "text-zinc-600"}`}
       >
         Patterns
       </p>
-      <div className={rail ? "grid grid-cols-2 gap-1" : "grid grid-cols-3 gap-1.5"}>
+      <div className={rail ? "grid grid-cols-2 gap-1.5" : "grid grid-cols-3 gap-2.5"}>
         {PATTERNS.map((pattern) => (
           <button
             key={pattern.id}
             type="button"
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPick(pattern)}
-            className={`rounded-lg px-2 py-1.5 text-left transition-colors ${
+            className={`text-left transition-colors ${
+              rail
+                ? "rounded-lg px-2 py-2"
+                : "min-h-[72px] rounded-xl px-3.5 py-3"
+            } ${
               luminous
                 ? "pattern-glass hover:border-sky-100/25 hover:bg-white/[0.08]"
                 : "border border-white/8 bg-[#0F1015]/80 hover:border-white/16 hover:bg-white/[0.04]"
             }`}
             title={pattern.label}
           >
-            <span className="block font-mono text-[10px] tracking-tight text-zinc-200">
+            <span
+              className={`block font-mono tracking-tight text-zinc-100 ${
+                rail ? "text-[10px]" : "text-[13px]"
+              }`}
+            >
               {pattern.short}
             </span>
             <span
-              className={`block truncate font-mono text-[9px] tracking-tight ${
-                luminous ? "text-sky-100/35" : "text-zinc-600"
-              }`}
+              className={`mt-0.5 block font-mono tracking-tight ${
+                rail ? "truncate text-[9px]" : "text-[11px] leading-snug"
+              } ${luminous ? "text-sky-100/45" : "text-zinc-600"}`}
             >
               {pattern.label}
             </span>

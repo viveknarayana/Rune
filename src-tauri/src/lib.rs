@@ -37,7 +37,7 @@ fn animate_window_to(window: WebviewWindow, target_w: f64, target_h: f64) {
         let from_h = start.height as f64 / scale;
         let Ok(pos) = window.outer_position() else { return };
         let cx = pos.x as f64 + start.width as f64 / 2.0;
-        let cy = pos.y as f64 + start.height as f64 / 2.0;
+        let top = pos.y as f64;
         const STEPS: i32 = 16;
         for step in 1..=STEPS {
             let t = step as f64 / STEPS as f64;
@@ -47,7 +47,7 @@ fn animate_window_to(window: WebviewWindow, target_w: f64, target_h: f64) {
             let _ = window.set_size(LogicalSize::new(width, height));
             let _ = window.set_position(PhysicalPosition::new(
                 (cx - width * scale / 2.0) as i32,
-                (cy - height * scale / 2.0) as i32,
+                top as i32,
             ));
             std::thread::sleep(Duration::from_millis(16));
         }
@@ -77,7 +77,7 @@ fn position_like_spotlight(window: &tauri::WebviewWindow) {
         if let Ok(size) = window.outer_size() {
             let work = monitor.work_area();
             let x = work.position.x + ((work.size.width as i32 - size.width as i32) / 2);
-            let y = work.position.y + (work.size.height as i32 / 7);
+            let y = work.position.y + (work.size.height as i32 / 18).max(28);
             let _ = window.set_position(PhysicalPosition::new(x, y));
         }
     }
