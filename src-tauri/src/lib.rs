@@ -60,6 +60,42 @@ fn set_hud_mode(window: WebviewWindow, mode: String) {
     animate_window_to(window, width, height);
 }
 
+fn jev_api_key() -> Result<String, String> {
+    std::env::var("TYPESAFE_API_KEY")
+        .or_else(|_| std::env::var("VITE_TYPESAFE_API_KEY"))
+        .map_err(|_| "Missing TYPESAFE_API_KEY or VITE_TYPESAFE_API_KEY".into())
+        .and_then(|key| {
+            let trimmed = key.trim().to_string();
+            if trimmed.is_empty() {
+                Err("TYPESAFE API key is empty".into())
+            } else {
+                Ok(trimmed)
+            }
+        })
+}
+
+#[tauri::command]
+async fn jev_system_one(payload: serde_json::Value) -> Result<serde_json::Value, String> {
+    let key = jev_api_key()?;
+    let response = reqwest::Client::new()
+        .post("https://api.typesafe.ai/v1/systemone")
+        .bearer_auth(key)
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| format!("Jev request failed: {err}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|err| format!("Jev body failed: {err}"))?;
+    if !status.is_success() {
+        return Err(format!("Jev HTTP {status}: {text}"));
+    }
+    serde_json::from_str(&text).map_err(|err| format!("Jev JSON failed: {err}"))
+}
+
 fn toggle_overlay(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
@@ -85,6 +121,9 @@ fn position_like_spotlight(window: &tauri::WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = dotenvy::from_filename("../.env");
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -95,7 +134,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![set_hud_mode])
+        .invoke_handler(tauri::generate_handler![set_hud_mode, jev_system_one])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));

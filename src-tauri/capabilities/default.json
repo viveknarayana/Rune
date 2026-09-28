@@ -19,6 +19,7 @@
     "core:window:allow-primary-monitor",
     "global-shortcut:allow-is-registered",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister"
+    "global-shortcut:allow-unregister",
+    "core:event:default"
   ]
 }

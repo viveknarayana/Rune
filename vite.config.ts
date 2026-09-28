@@ -17,5 +17,12 @@ export default defineConfig({
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
+    proxy: {
+      "/typesafe-api": {
+        target: "https://api.typesafe.ai",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/typesafe-api/, ""),
+      },
+    },
   },
 });

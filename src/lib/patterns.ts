@@ -670,6 +670,149 @@ function alreadyLinked(
   return edges.some((edge) => edge.source === source && edge.target === target);
 }
 
+function nodeHay(node: GraphNode) {
+  return `${node.id} ${node.label}`;
+}
+
+export function isPublicHopNode(node: GraphNode) {
+  if (node.type === "EDGE") return true;
+  return /waf|cloudfront|\bcdn\b|shield/i.test(nodeHay(node));
+}
+
+export function isIamNode(node: GraphNode) {
+  return (
+    /iam\b|identity and access/i.test(nodeHay(node)) &&
+    !/waf/i.test(nodeHay(node))
+  );
+}
+
+function isReplicaNode(node: GraphNode) {
+  return node.type === "STORAGE" && /replica/i.test(nodeHay(node));
+}
+
+function hangEdgeLabel(from: GraphNode, extra: GraphNode) {
+  if (extra.type === "CACHE") return "Cache Hit";
+  if (isReplicaNode(extra) && from.type === "STORAGE") return "Replicate";
+  if (isReplicaNode(extra)) return "Cache Miss";
+  return "Attach";
+}
+
+/** Keep Gateway → services (including Payment). Put WAF/CDN on Client → Gateway. */
+export function repairRequestGraph(state: CanvasState): CanvasState {
+  const next = cloneState(state);
+  const node = (id: string) => next.nodes.find((item) => item.id === id);
+
+  next.edges = next.edges.filter((edge) => {
+    const source = node(edge.source);
+    const target = node(edge.target);
+    if (!source || !target) return true;
+    if (isIamNode(target) && source.type !== "SECURITY") return false;
+    if (isIamNode(source) && target.type !== "SECURITY") return false;
+    if (isPublicHopNode(source) && target.type === "SERVICE") return false;
+    if (source.type === "SERVICE" && isPublicHopNode(target)) return false;
+    if (source.type === "GATEWAY" && isPublicHopNode(target)) return false;
+    if (source.type === "FRONTEND" && target.type === "SERVICE") return false;
+    return true;
+  });
+
+  const iam = next.nodes.find(isIamNode);
+  const auth = next.nodes.find(
+    (item) =>
+      item.type === "SECURITY" && !isIamNode(item) && !isPublicHopNode(item),
+  );
+  if (iam && auth && !alreadyLinked(next.edges, auth.id, iam.id)) {
+    next.edges.push({ source: auth.id, target: iam.id, label: "Policies" });
+  }
+
+  const hasCache = next.nodes.some((item) => item.type === "CACHE");
+  next.edges = next.edges.map((edge) => {
+    const source = node(edge.source);
+    const target = node(edge.target);
+    if (!source || !target) return edge;
+    if (target.type === "CACHE" && (source.type === "SERVICE" || source.type === "GATEWAY")) {
+      return { ...edge, label: "Cache Hit" };
+    }
+    if (isReplicaNode(target) && source.type === "STORAGE") {
+      return { ...edge, label: "Replicate" };
+    }
+    if (isReplicaNode(target) && source.type === "SERVICE") {
+      return { ...edge, label: "Cache Miss" };
+    }
+    if (
+      hasCache &&
+      target.type === "STORAGE" &&
+      !isReplicaNode(target) &&
+      source.type === "SERVICE" &&
+      (!edge.label || /attach|write|link|produce/i.test(edge.label))
+    ) {
+      return { ...edge, label: "Cache Miss" };
+    }
+    return edge;
+  });
+
+  const clients = next.nodes.filter((item) => item.type === "FRONTEND");
+  const gateways = next.nodes.filter((item) => item.type === "GATEWAY");
+  const wafs = next.nodes.filter((item) => /waf/i.test(nodeHay(item)));
+  const cdns = next.nodes.filter(
+    (item) =>
+      (item.type === "EDGE" || /cloudfront|\bcdn\b/i.test(nodeHay(item))) &&
+      !/waf/i.test(nodeHay(item)),
+  );
+
+  if (wafs.length && cdns.length) {
+    next.edges = next.edges.filter((edge) => {
+      const source = node(edge.source);
+      const target = node(edge.target);
+      if (!source || !target) return true;
+      if (wafs.some((waf) => waf.id === source.id) && target.type === "GATEWAY") {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  const firstHop = wafs[0] ?? cdns[0] ?? gateways[0];
+  const afterWaf = cdns[0] ?? gateways[0];
+  const afterCdn = gateways[0];
+
+  for (const client of clients) {
+    next.edges = next.edges.filter((edge) => edge.source !== client.id);
+    if (firstHop && firstHop.id !== client.id) {
+      next.edges.push({
+        source: client.id,
+        target: firstHop.id,
+        label: "HTTPS",
+      });
+    }
+  }
+  if (
+    wafs[0] &&
+    afterWaf &&
+    wafs[0].id !== afterWaf.id &&
+    !alreadyLinked(next.edges, wafs[0].id, afterWaf.id)
+  ) {
+    next.edges.push({
+      source: wafs[0].id,
+      target: afterWaf.id,
+      label: "Inspect",
+    });
+  }
+  if (
+    cdns[0] &&
+    afterCdn &&
+    cdns[0].id !== afterCdn.id &&
+    !alreadyLinked(next.edges, cdns[0].id, afterCdn.id)
+  ) {
+    next.edges.push({
+      source: cdns[0].id,
+      target: afterCdn.id,
+      label: "Edge",
+    });
+  }
+
+  return next;
+}
+
 function materialize(
   state: CanvasState,
   pattern: DesignPattern,
@@ -859,7 +1002,28 @@ function applyOverlay(
     delete (fresh as { x?: number }).x;
     delete (fresh as { y?: number }).y;
     next.nodes.push(fresh);
-    next = insertBuffer(next, fresh, prefer);
+    if (fresh.type === "CACHE") {
+      const writer =
+        next.nodes.find((node) => node.id === prefer) ??
+        next.nodes.find((node) => node.type === "SERVICE");
+      if (writer && !alreadyLinked(next.edges, writer.id, fresh.id)) {
+        next.edges.push({
+          source: writer.id,
+          target: fresh.id,
+          label: "Cache Hit",
+        });
+      }
+      if (writer) {
+        next.edges = next.edges.map((edge) => {
+          if (edge.source !== writer.id) return edge;
+          const target = next.nodes.find((node) => node.id === edge.target);
+          if (target?.type !== "STORAGE") return edge;
+          return { ...edge, label: "Cache Miss" };
+        });
+      }
+    } else {
+      next = insertBuffer(next, fresh, prefer);
+    }
   }
   const replicaKey = pattern.overlay?.replica;
   const replicaSample = replicaKey
@@ -888,7 +1052,7 @@ function applyOverlay(
     }
     for (const source of producers) {
       if (!alreadyLinked(next.edges, source, replica.id)) {
-        next.edges.push({ source, target: replica.id, label: "Read" });
+        next.edges.push({ source, target: replica.id, label: "Cache Miss" });
       }
     }
     for (const store of stores) {
@@ -1016,23 +1180,31 @@ export function hangSubsystemNodes(
     if (!next.nodes.some((node) => node.id === hang.extraId)) continue;
     if (!next.nodes.some((node) => node.id === hang.fromId)) continue;
     if (prior.size && prior.has(hang.fromId)) {
+      const frontendIds = new Set(
+        next.nodes.filter((node) => node.type === "FRONTEND").map((node) => node.id),
+      );
       next.edges = next.edges.filter(
         (edge) =>
           !(
             edge.target === hang.extraId &&
             prior.has(edge.source) &&
-            edge.source !== hang.fromId
+            edge.source !== hang.fromId &&
+            !frontendIds.has(edge.source)
           ),
       );
     }
+    const extra = next.nodes.find((item) => item.id === hang.extraId);
+    const from = next.nodes.find((item) => item.id === hang.fromId);
+    if (!extra || !from) continue;
+    if (isPublicHopNode(extra) || isIamNode(extra)) continue;
     if (alreadyLinked(next.edges, hang.fromId, hang.extraId)) continue;
     next.edges.push({
       source: hang.fromId,
       target: hang.extraId,
-      label: "Attach",
+      label: hangEdgeLabel(from, extra),
     });
   }
-  return next;
+  return repairRequestGraph(next);
 }
 
 export function applyPattern(
@@ -1046,13 +1218,21 @@ export function applyPattern(
     return applyMerge(undefined, pattern);
   }
   const mode = opts.mode ?? "merge";
-  if (mode === "inject") return applyInject(current, pattern, opts.anchor);
-  if (mode === "overlay") return applyOverlay(current, pattern, opts.anchor);
-  if (mode === "split") return applySplit(current, pattern, opts.anchor);
-  if (mode === "bridge") {
-    return applyBridge(current, pattern, opts.anchor, opts.anchorTo);
+  if (mode === "inject") {
+    return repairRequestGraph(applyInject(current, pattern, opts.anchor));
   }
-  return applyMerge(current, pattern, opts.anchor);
+  if (mode === "overlay") {
+    return repairRequestGraph(applyOverlay(current, pattern, opts.anchor));
+  }
+  if (mode === "split") {
+    return repairRequestGraph(applySplit(current, pattern, opts.anchor));
+  }
+  if (mode === "bridge") {
+    return repairRequestGraph(
+      applyBridge(current, pattern, opts.anchor, opts.anchorTo),
+    );
+  }
+  return repairRequestGraph(applyMerge(current, pattern, opts.anchor));
 }
 
 export function fallbackPatternAction(): TopologyAction {

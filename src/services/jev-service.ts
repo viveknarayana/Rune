@@ -1,13 +1,14 @@
-import { TypeSafeClient } from "@typesafe-ai/sdk";
 import {
   inferAction,
   isExplicitRebuild,
   processGraphAction,
 } from "../lib/graph-actions";
 import { isIntentAction } from "../lib/intents";
-import { parsePromptSteps } from "../lib/mutations";
 import {
   hangSubsystemNodes,
+  isIamNode,
+  isPublicHopNode,
+  repairRequestGraph,
   inferApplyMode,
   isPatternAction,
   type ApplyMode,
@@ -18,6 +19,9 @@ import type {
   ThemeMode,
   TopologyAction,
 } from "../lib/types";
+import { createJevClient, hasJevKey } from "./jev-client";
+
+export { hasJevKey };
 
 const TOPOLOGY_CRITERIA = {
   PATTERN_EVENT_PIPELINE:
@@ -70,7 +74,6 @@ const THEME_CRITERIA = {
 } as const;
 
 const STIFFNESS_CRITERIA = [
-  "unused",
   "fluid loose",
   "very soft",
   "soft",
@@ -121,21 +124,20 @@ async function placeSubsystemWithJev(
   before: CanvasState,
   after: CanvasState,
 ): Promise<{ state: CanvasState; steps: string[] }> {
-  const apiKey = import.meta.env.VITE_TYPESAFE_API_KEY?.trim();
   const added = after.nodes.filter(
     (node) => !before.nodes.some((prior) => prior.id === node.id),
   );
-  if (!apiKey || !added.length || !before.nodes.length) {
-    return { state: after, steps: [] };
+  if (!added.length || !before.nodes.length) {
+    return { state: repairRequestGraph(after), steps: [] };
   }
-
-  const extras = added.slice(0, 8);
+  const extras = added
+    .filter((node) => !isPublicHopNode(node) && !isIamNode(node))
+    .slice(0, 8);
+  if (!extras.length) {
+    return { state: repairRequestGraph(after), steps: [] };
+  }
   const priorIds = before.nodes.map((node) => node.id);
-  const client = new TypeSafeClient({
-    apiKey,
-    defaultModel: "jev-1.13.0",
-    dangerouslyAllowBrowser: true,
-  });
+  const client = createJevClient();
 
   const hangChoicesFor = (extraId: string) => {
     const others = extras.filter((node) => node.id !== extraId);
@@ -153,6 +155,7 @@ async function placeSubsystemWithJev(
   };
 
   try {
+    console.info("[jev] hang", extras.map((node) => node.id).join(", "));
     const decision = await client.systemOne({
       state: {
         user_prompt: prompt,
@@ -165,7 +168,7 @@ async function placeSubsystemWithJev(
           `hang_${node.id}`,
           {
             type: "choice" as const,
-            instructions: `Attach ${node.label} [${node.type}] onto the graph. Prefer the named existing producer (Fraud Engine, Order Service, API). Use another extra only for internal order (queue → worker → store). Do not pick keep unless the recipe already hangs this extra off the right board node.`,
+            instructions: `Hang ${node.label} [${node.type}] on the producer that owns it. Cache and replicas belong on the order/app write path (Cache Hit / Cache Miss / Replicate). Never hang WAF, CDN, CloudFront, or IAM on a service — those stay on Client → Gateway.`,
             criteria: Object.fromEntries(hangChoicesFor(node.id)),
           },
         ]),
@@ -178,7 +181,7 @@ async function placeSubsystemWithJev(
       if (!picked || picked === "keep") return [];
       return [{ extraId: node.id, fromId: picked }];
     });
-    if (!hangs.length) return { state: after, steps: [] };
+    if (!hangs.length) return { state: repairRequestGraph(after), steps: [] };
 
     const state = hangSubsystemNodes(after, hangs, priorIds);
     const steps = hangs.flatMap((hang) => {
@@ -188,21 +191,16 @@ async function placeSubsystemWithJev(
       return [`Jev hung ${extra.label} off ${from.label}`];
     });
     return { state, steps };
-  } catch {
-    return { state: after, steps: [] };
+  } catch (error) {
+    throw error instanceof Error
+      ? error
+      : new Error("Jev hang pass failed.");
   }
 }
 
 async function evaluateWithJev(prompt: string, currentState?: CanvasState) {
-  const apiKey = import.meta.env.VITE_TYPESAFE_API_KEY?.trim();
-  if (!apiKey) return null;
-
   const isMutation = Boolean(currentState?.nodes.length);
-  const client = new TypeSafeClient({
-    apiKey,
-    defaultModel: "jev-1.13.0",
-    dangerouslyAllowBrowser: true,
-  });
+  const client = createJevClient();
 
   const nodeChoices = [
     ["auto", "Infer the attach point from the request path (client / gateway / app). Never prefer a database unless the user named it."],
@@ -212,6 +210,7 @@ async function evaluateWithJev(prompt: string, currentState?: CanvasState) {
     ]) ?? []),
   ] as [string, string][];
 
+  console.info("[jev] classify", prompt.slice(0, 120));
   return client.systemOne({
     state: {
       user_prompt: prompt,
@@ -279,74 +278,61 @@ export async function evaluateJevSystemDesign(
   options?: { anchor?: string },
 ): Promise<CompilerResult> {
   const started = performance.now();
-  const local = compileLocal(prompt, currentState, options?.anchor);
 
-  try {
-    const decision = await evaluateWithJev(prompt, currentState);
-    if (!decision) return local;
-
-    const answers = decision.answers as {
-      pattern_anchor?: { choice?: string };
-      pattern_anchor_to?: { choice?: string };
-      apply_mode?: { choice?: string };
-    };
-    const localStep = parsePromptSteps(prompt).find(
-      (step) => step.kind === "apply_pattern",
-    );
-    const parsedAction =
-      localStep?.kind === "apply_pattern" && isPatternAction(localStep.pattern)
-        ? localStep.pattern
-        : undefined;
-    const rawAction = (parsedAction ??
-      decision.answers.topology_action.choice) as TopologyAction;
-    const keepPattern =
-      isPatternAction(rawAction) ||
-      isIntentAction(rawAction) ||
-      rawAction === "SIMULATE_OUTAGE";
-    const action =
-      currentState?.nodes.length && !isExplicitRebuild(prompt) && !keepPattern
-        ? "MUTATE_GRAPH"
-        : rawAction;
-    const picked = answers.pattern_anchor?.choice;
-    const pickedTo = answers.pattern_anchor_to?.choice;
-    const anchor =
-      (localStep?.kind === "apply_pattern" && localStep.anchor) ||
-      (picked && picked !== "auto" ? picked : undefined) ||
-      options?.anchor;
-    const anchorTo =
-      (localStep?.kind === "apply_pattern" && localStep.anchorTo) ||
-      (pickedTo && pickedTo !== "auto" ? pickedTo : undefined);
-    const mode = ((localStep?.kind === "apply_pattern" && localStep.mode) ||
-      inferApplyMode(prompt) ||
-      answers.apply_mode?.choice) as ApplyMode | undefined;
-    let { state, steps } = processGraphAction(action, prompt, currentState, {
-      anchor,
-      mode,
-      anchorTo,
-    });
-    if (currentState?.nodes.length) {
-      const placed = await placeSubsystemWithJev(prompt, currentState, state);
-      state = placed.state;
-      steps = [...steps, ...placed.steps];
-    }
-
-    return {
-      ...state,
-      groups: state.groups ?? [],
-      theme_mode: decision.answers.theme_mode.choice as ThemeMode,
-      is_anomaly: decision.answers.is_anomaly_detected.noul > 0.7,
-      stiffness: Math.min(
-        10,
-        Math.max(1, Math.round(decision.answers.spring_stiffness_score.score)),
-      ),
-      execution_time_ms: Number((performance.now() - started).toFixed(2)),
-      source: "jev",
-      action,
-      steps,
-    };
-  } catch {
-    return local;
+  const decision = await evaluateWithJev(prompt, currentState);
+  const answers = decision.answers as {
+    pattern_anchor?: { choice?: string };
+    pattern_anchor_to?: { choice?: string };
+    apply_mode?: { choice?: string };
+  };
+  const chip = prompt.trim().match(/^Apply (PATTERN_[A-Z0-9_]+)$/i);
+  const chipAction =
+    chip && isPatternAction(chip[1].toUpperCase())
+      ? (chip[1].toUpperCase() as TopologyAction)
+      : undefined;
+  const rawAction = (chipAction ??
+    decision.answers.topology_action.choice) as TopologyAction;
+  const keepPattern =
+    isPatternAction(rawAction) ||
+    isIntentAction(rawAction) ||
+    rawAction === "SIMULATE_OUTAGE";
+  const action =
+    currentState?.nodes.length && !isExplicitRebuild(prompt) && !keepPattern
+      ? "MUTATE_GRAPH"
+      : rawAction;
+  const picked = answers.pattern_anchor?.choice;
+  const pickedTo = answers.pattern_anchor_to?.choice;
+  const anchor =
+    (picked && picked !== "auto" ? picked : undefined) || options?.anchor;
+  const anchorTo = pickedTo && pickedTo !== "auto" ? pickedTo : undefined;
+  const mode = (answers.apply_mode?.choice || inferApplyMode(prompt)) as
+    | ApplyMode
+    | undefined;
+  let { state, steps } = processGraphAction(action, prompt, currentState, {
+    anchor,
+    mode,
+    anchorTo,
+  });
+  if (currentState?.nodes.length) {
+    const placed = await placeSubsystemWithJev(prompt, currentState, state);
+    state = placed.state;
+    steps = [...steps, ...placed.steps];
   }
+
+  return {
+    ...state,
+    groups: state.groups ?? [],
+    theme_mode: decision.answers.theme_mode.choice as ThemeMode,
+    is_anomaly: decision.answers.is_anomaly_detected.noul > 0.7,
+    stiffness: Math.min(
+      10,
+      Math.max(1, Math.round(decision.answers.spring_stiffness_score.score)),
+    ),
+    execution_time_ms: Number((performance.now() - started).toFixed(2)),
+    source: "jev",
+    action,
+    steps,
+  };
 }
 
 export { compileLocal };

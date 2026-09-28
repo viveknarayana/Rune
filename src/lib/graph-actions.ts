@@ -96,21 +96,26 @@ export function processGraphAction(
   let state = currentState?.nodes.length ? currentState : emptyState();
   const steps: string[] = [];
 
+  const fromJevPattern = isPatternAction(action) ? getPattern(action) : undefined;
+  const fromJevIntent = isIntentAction(action) ? getIntent(action) : undefined;
+  const jevOwns =
+    Boolean(fromJevPattern || fromJevIntent) || action === "MUTATE_GRAPH";
+
   const pattern =
+    fromJevPattern ||
     (patternStep?.kind === "apply_pattern" && getPattern(patternStep.pattern)) ||
-    (isPatternAction(action) ? getPattern(action) : undefined) ||
-    (other.length ? undefined : matchPattern(prompt));
+    (jevOwns || other.length ? undefined : matchPattern(prompt));
 
   const intent =
+    fromJevIntent ||
     (intentStep?.kind === "apply_intent" && getIntent(intentStep.intent)) ||
-    (isIntentAction(action) ? getIntent(action) : undefined) ||
-    (other.length ? undefined : matchIntent(prompt));
+    (jevOwns || other.length ? undefined : matchIntent(prompt));
 
   const parsedMode =
+    options?.mode ||
     (patternStep?.kind === "apply_pattern" &&
       (patternStep.mode as ApplyMode | undefined)) ||
-    inferApplyMode(prompt) ||
-    options?.mode;
+    inferApplyMode(prompt);
   const anchor =
     options?.anchor ??
     (patternStep?.kind === "apply_pattern" ? patternStep.anchor : undefined) ??
@@ -123,7 +128,7 @@ export function processGraphAction(
     (caseStep?.kind === "apply_case" && caseStep.case) ||
     (!other.length ? parseHandleCase(prompt) : undefined);
 
-  if (caseText) {
+  if (caseText && !fromJevIntent && !fromJevPattern) {
     state = applyCase(merging ? state : undefined, caseText, anchor);
     steps.push(`Handle ${resolveCase(caseText).label}`);
   } else if (intent) {

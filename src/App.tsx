@@ -35,8 +35,8 @@ import { applyTheme } from "./lib/themes";
 import type { CanvasState, CompilerResult, NodeTypeName } from "./lib/types";
 import { applyMutation } from "./lib/mutations";
 import {
-  compileLocal,
   evaluateJevSystemDesign,
+  hasJevKey,
 } from "./services/jev-service";
 import type { NodeMenuAction } from "./components/NodeMenu";
 
@@ -80,6 +80,8 @@ export default function App() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [prompt, setPrompt] = useState("");
   const [compiling, setCompiling] = useState(false);
+  const [compileError, setCompileError] = useState<string | null>(null);
+  const jevReady = hasJevKey();
   const [decision, setDecision] = useState<CompilerResult | null>(null);
   const [palette, setPalette] = useState<ColorPalette>(DEFAULT_PALETTE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -339,6 +341,10 @@ export default function App() {
     async (nextPrompt?: string) => {
       const value = (nextPrompt ?? prompt).trim();
       if (!value) return;
+      if (!hasJevKey()) {
+        setCompileError("Set VITE_TYPESAFE_API_KEY in .env — Jev is required.");
+        return;
+      }
       if (isUndoCommand(value)) {
         undo();
         setPrompt("");
@@ -363,9 +369,7 @@ export default function App() {
           }
         : undefined;
       const gen = (compileGen.current += 1);
-      commitDecision((prev) =>
-        adoptResult(compileLocal(value, currentState, selectedId ?? undefined), prev, value),
-      );
+      setCompileError(null);
       setCompiling(true);
 
       try {
@@ -375,6 +379,11 @@ export default function App() {
         if (gen !== compileGen.current) return;
         commitDecision((prev) =>
           adoptResult({ ...payload, groups: payload.groups ?? [] }, prev, value),
+        );
+      } catch (error) {
+        if (gen !== compileGen.current) return;
+        setCompileError(
+          error instanceof Error ? error.message : "Jev compile failed.",
         );
       } finally {
         if (gen === compileGen.current) setCompiling(false);
@@ -534,10 +543,16 @@ export default function App() {
             prompt={prompt}
             compiling={compiling}
             luminous
+            jevReady={jevReady}
             onPromptChange={setPrompt}
             onCompile={compile}
             inputRef={inputRef}
           />
+          {compileError && (
+            <p className="mt-1.5 px-1 font-mono text-[10px] tracking-tight text-red-300/90">
+              {compileError}
+            </p>
+          )}
 
           <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden">
             <div className="shrink-0">

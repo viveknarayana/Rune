@@ -4,6 +4,7 @@ interface CommandBarProps {
   prompt: string;
   compiling: boolean;
   luminous?: boolean;
+  jevReady?: boolean;
   onPromptChange: (value: string) => void;
   onCompile: (value?: string) => void;
   inputRef: RefObject<HTMLInputElement | null>;
@@ -13,6 +14,7 @@ export function CommandBar({
   prompt,
   compiling,
   luminous,
+  jevReady = true,
   onPromptChange,
   onCompile,
   inputRef,
@@ -42,7 +44,13 @@ export function CommandBar({
           ref={inputRef}
           value={prompt}
           onChange={(event) => onPromptChange(event.target.value)}
-          placeholder={luminous ? "Describe a system, or search AWS…" : "Search AWS…"}
+          placeholder={
+            !jevReady
+              ? "Set VITE_TYPESAFE_API_KEY in .env"
+              : luminous
+                ? "Describe a system, or search AWS…"
+                : "Search AWS…"
+          }
           autoFocus
           onBlur={() => {
             window.requestAnimationFrame(() => {
@@ -71,10 +79,10 @@ export function CommandBar({
         <button
           type="submit"
           onMouseDown={(event) => event.preventDefault()}
-          disabled={compiling || !prompt.trim()}
+          disabled={compiling || !prompt.trim() || !jevReady}
           className="rounded-full bg-zinc-100 px-2.5 py-1 text-[10px] font-medium tracking-tight text-zinc-950 disabled:opacity-30"
         >
-          {compiling ? "…" : "Run"}
+          {compiling ? "Jev" : "Run"}
         </button>
       </div>
     </form>

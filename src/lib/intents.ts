@@ -3,7 +3,10 @@ import { bestInGraph, findInGraph, resolveComponent, toNode } from "./catalog";
 import {
   applyPattern,
   getPattern,
+  isIamNode,
+  isPublicHopNode,
   matchPattern,
+  repairRequestGraph,
   type PatternId,
 } from "./patterns";
 import type { CanvasState, GraphNode } from "./types";
@@ -180,40 +183,64 @@ function addExtra(state: CanvasState, name: string, preferId?: string): CanvasSt
     return insertBuffer(next, next.nodes.find((item) => item.id === node.id)!, preferId);
   }
 
-  const hook = requestPathHook(next.nodes, next.edges, node.id, preferId);
-  if (!hook) return next;
-
-  const edgeShield =
-    node.type === "EDGE" ||
-    /waf|cloudfront|cdn|shield/i.test(`${node.id} ${node.label}`);
   const already = (source: string, target: string) =>
     next.edges.some((edge) => edge.source === source && edge.target === target);
 
-  if (edgeShield && (hook.type === "GATEWAY" || hook.type === "SERVICE")) {
-    const client = next.nodes.find(
-      (item) => item.type === "FRONTEND" && item.id !== node.id,
+  if (isIamNode(node)) {
+    const auth = next.nodes.find(
+      (item) =>
+        item.type === "SECURITY" &&
+        item.id !== node.id &&
+        !isIamNode(item) &&
+        !isPublicHopNode(item),
     );
-    if (client) {
-      next.edges = next.edges.map((edge) =>
-        edge.source === client.id && edge.target === hook.id
-          ? { ...edge, target: node.id, label: edge.label ?? "HTTPS" }
-          : edge,
-      );
-      if (!already(client.id, node.id)) {
-        next.edges.push({ source: client.id, target: node.id, label: "HTTPS" });
-      }
-    }
-    if (!already(node.id, hook.id)) {
-      next.edges.push({
-        source: node.id,
-        target: hook.id,
-        label: node.type === "SECURITY" ? "Inspect" : "Edge",
-      });
+    if (auth && !already(auth.id, node.id)) {
+      next.edges.push({ source: auth.id, target: node.id, label: "Policies" });
     }
     return next;
   }
 
-  if (!already(hook.id, node.id)) {
+  const isPublicEdge = isPublicHopNode(node);
+
+  if (isPublicEdge) {
+    const client = next.nodes.find(
+      (item) => item.type === "FRONTEND" && item.id !== node.id,
+    );
+    if (client) {
+      const outbound = next.edges.filter((edge) => edge.source === client.id);
+      const hop =
+        outbound[0]?.target ??
+        next.nodes.find((item) => item.type === "GATEWAY" && item.id !== node.id)?.id;
+      next.edges = next.edges.filter((edge) => edge.source !== client.id);
+      if (!already(client.id, node.id)) {
+        next.edges.push({ source: client.id, target: node.id, label: "HTTPS" });
+      }
+      const down = hop && hop !== node.id ? hop : undefined;
+      if (down && !already(node.id, down)) {
+        next.edges.push({
+          source: node.id,
+          target: down,
+          label: node.type === "SECURITY" ? "Inspect" : "Edge",
+        });
+      }
+      for (const edge of outbound) {
+        if (edge.target === node.id || edge.target === down) continue;
+        if (!already(node.id, edge.target)) {
+          next.edges.push({
+            source: node.id,
+            target: edge.target,
+            label: edge.label ?? "Edge",
+          });
+        }
+      }
+      return next;
+    }
+  }
+
+  const hook = requestPathHook(next.nodes, next.edges, node.id, preferId);
+  if (!hook) return next;
+
+  if (!already(hook.id, node.id) && !already(node.id, hook.id)) {
     next.edges.push({
       source: hook.id,
       target: node.id,
@@ -248,7 +275,7 @@ export function applyIntent(
     state = addExtra(state, extra, anchor);
   }
 
-  return state;
+  return repairRequestGraph(state);
 }
 
 export function parseHandleCase(prompt: string): string | undefined {
@@ -331,5 +358,5 @@ export function applyCase(
   for (const extra of recipe.extras ?? []) {
     next = addExtra(next, extra, anchor);
   }
-  return next;
+  return repairRequestGraph(next);
 }
