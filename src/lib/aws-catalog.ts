@@ -22,8 +22,18 @@ export interface AwsService {
   icon: string;
 }
 
-const ICON = (file: string) =>
-  `https://cdn.jsdelivr.net/npm/aws-icons@1.6.2/icons/architecture-service/${file}.svg`;
+const ICON_FILES = import.meta.glob("../assets/aws-icons/*.svg", {
+  eager: true,
+  query: "?url",
+  import: "default",
+}) as Record<string, string>;
+
+const ICON = (file: string) => {
+  const hit = Object.entries(ICON_FILES).find(([path]) =>
+    path.endsWith(`/${file}.svg`),
+  );
+  return hit?.[1] ?? `/aws-icons/${file}.svg`;
+};
 
 export const AWS_SERVICES: AwsService[] = [
   { id: "ec2", label: "Amazon EC2", short: "EC2", category: "Compute", type: "SERVICE", aliases: ["ec2", "virtual machine", "instance"], icon: ICON("AmazonEC2") },
@@ -47,7 +57,7 @@ export const AWS_SERVICES: AwsService[] = [
   { id: "redshift", label: "Amazon Redshift", short: "Redshift", category: "Analytics", type: "STORAGE", aliases: ["redshift", "warehouse"], icon: ICON("AmazonRedshift") },
   { id: "documentdb", label: "Amazon DocumentDB", short: "DocumentDB", category: "Database", type: "STORAGE", aliases: ["documentdb", "mongo"], icon: ICON("AmazonDocumentDB") },
   { id: "neptune", label: "Amazon Neptune", short: "Neptune", category: "Database", type: "STORAGE", aliases: ["neptune", "graph db"], icon: ICON("AmazonNeptune") },
-  { id: "vpc", label: "Amazon VPC", short: "VPC", category: "Networking", type: "CUSTOM", aliases: ["vpc"], icon: ICON("AmazonVPC") },
+  { id: "vpc", label: "Amazon VPC", short: "VPC", category: "Networking", type: "CUSTOM", aliases: ["vpc"], icon: ICON("AmazonVirtualPrivateCloud") },
   { id: "route53", label: "Amazon Route 53", short: "Route 53", category: "Networking", type: "EDGE", aliases: ["route 53", "route53", "dns"], icon: ICON("AmazonRoute53") },
   { id: "cloudfront", label: "Amazon CloudFront", short: "CloudFront", category: "Networking", type: "EDGE", aliases: ["cloudfront", "cdn"], icon: ICON("AmazonCloudFront") },
   { id: "apigateway", label: "Amazon API Gateway", short: "API GW", category: "Networking", type: "GATEWAY", aliases: ["api gateway", "api gw", "apigw", "apigateway"], icon: ICON("AmazonAPIGateway") },
@@ -65,18 +75,18 @@ export const AWS_SERVICES: AwsService[] = [
   { id: "inspector", label: "Amazon Inspector", short: "Inspector", category: "Security", type: "SECURITY", aliases: ["inspector"], icon: ICON("AmazonInspector") },
   { id: "acm", label: "AWS Certificate Manager", short: "ACM", category: "Security", type: "SECURITY", aliases: ["acm", "certificate manager", "tls cert"], icon: ICON("AWSCertificateManager") },
   { id: "sqs", label: "Amazon SQS", short: "SQS", category: "Integration", type: "TELEMETRY", aliases: ["sqs", "queue"], icon: ICON("AmazonSimpleQueueService") },
-  { id: "sns", label: "Amazon SNS", short: "SNS", category: "Integration", type: "TELEMETRY", aliases: ["sns", "notification"], icon: ICON("AmazonSimpleNotificationService") },
-  { id: "eventbridge", label: "Amazon EventBridge", short: "EventBridge", category: "Integration", type: "TELEMETRY", aliases: ["eventbridge", "event bus"], icon: ICON("AmazonEventBridge") },
+  { id: "sns", label: "Amazon SNS", short: "SNS", category: "Integration", type: "TELEMETRY", aliases: ["sns", "notification", "pubsub"], icon: ICON("AmazonSimpleNotificationService") },
+  { id: "eventbridge", label: "Amazon EventBridge", short: "EventBridge", category: "Integration", type: "TELEMETRY", aliases: ["eventbridge", "event bus", "bus"], icon: ICON("AmazonEventBridge") },
   { id: "stepfunctions", label: "AWS Step Functions", short: "Steps", category: "Integration", type: "SERVICE", aliases: ["step functions", "state machine"], icon: ICON("AWSStepFunctions") },
   { id: "appsync", label: "AWS AppSync", short: "AppSync", category: "Integration", type: "GATEWAY", aliases: ["appsync", "graphql"], icon: ICON("AWSAppSync") },
   { id: "mq", label: "Amazon MQ", short: "MQ", category: "Integration", type: "TELEMETRY", aliases: ["amazon mq", "activemq"], icon: ICON("AmazonMQ") },
-  { id: "kinesis", label: "Amazon Kinesis", short: "Kinesis", category: "Analytics", type: "TELEMETRY", aliases: ["kinesis", "stream"], icon: ICON("AmazonKinesis") },
+  { id: "kinesis", label: "Amazon Kinesis", short: "Kinesis", category: "Analytics", type: "TELEMETRY", aliases: ["kinesis", "stream", "data stream"], icon: ICON("AmazonKinesis") },
   { id: "athena", label: "Amazon Athena", short: "Athena", category: "Analytics", type: "SERVICE", aliases: ["athena"], icon: ICON("AmazonAthena") },
   { id: "glue", label: "AWS Glue", short: "Glue", category: "Analytics", type: "SERVICE", aliases: ["glue", "etl"], icon: ICON("AWSGlue") },
   { id: "emr", label: "Amazon EMR", short: "EMR", category: "Analytics", type: "SERVICE", aliases: ["emr", "spark"], icon: ICON("AmazonEMR") },
   { id: "opensearch", label: "Amazon OpenSearch", short: "OpenSearch", category: "Analytics", type: "STORAGE", aliases: ["opensearch", "elasticsearch"], icon: ICON("AmazonOpenSearchService") },
-  { id: "quicksight", label: "Amazon QuickSight", short: "QuickSight", category: "Analytics", type: "FRONTEND", aliases: ["quicksight"], icon: ICON("AmazonQuickSight") },
-  { id: "msk", label: "Amazon MSK", short: "MSK", category: "Analytics", type: "TELEMETRY", aliases: ["msk", "kafka"], icon: ICON("AmazonManagedStreamingforApacheKafka") },
+  { id: "quicksight", label: "Amazon QuickSight", short: "QuickSight", category: "Analytics", type: "FRONTEND", aliases: ["quicksight"], icon: ICON("AmazonQuickSuite") },
+  { id: "msk", label: "Amazon MSK", short: "MSK", category: "Analytics", type: "TELEMETRY", aliases: ["msk", "kafka", "buffer"], icon: ICON("AmazonManagedStreamingforApacheKafka") },
   { id: "sagemaker", label: "Amazon SageMaker", short: "SageMaker", category: "AI", type: "SERVICE", aliases: ["sagemaker"], icon: ICON("AmazonSageMaker") },
   { id: "bedrock", label: "Amazon Bedrock", short: "Bedrock", category: "AI", type: "SERVICE", aliases: ["bedrock"], icon: ICON("AmazonBedrock") },
   { id: "comprehend", label: "Amazon Comprehend", short: "Comprehend", category: "AI", type: "SERVICE", aliases: ["comprehend"], icon: ICON("AmazonComprehend") },
@@ -154,9 +164,11 @@ export function scoreAwsService(query: string, service: AwsService): number {
 
 export function searchAwsServices(query: string, limit = 10): AwsService[] {
   if (!query.trim()) {
-    return FEATURED_AWS_IDS.map(
-      (id) => AWS_SERVICES.find((s) => s.id === id)!,
+    const featured = FEATURED_AWS_IDS.map(
+      (id) => AWS_SERVICES.find((service) => service.id === id)!,
     ).filter(Boolean);
+    const rest = AWS_SERVICES.filter((service) => !FEATURED_AWS_IDS.includes(service.id));
+    return [...featured, ...rest].slice(0, Math.max(limit, featured.length));
   }
   return AWS_SERVICES.map((service) => ({
     service,
@@ -166,6 +178,40 @@ export function searchAwsServices(query: string, limit = 10): AwsService[] {
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((row) => row.service);
+}
+
+export const PRESET_AWS_STACKS: { id: string; triggers: string[]; ids: string[] }[] = [
+  {
+    id: "SERVERLESS_WEB_APP",
+    triggers: ["serverless", "serverless web", "jamstack"],
+    ids: ["cloudfront", "s3", "apigateway", "lambda", "dynamodb"],
+  },
+  {
+    id: "EVENT_DRIVEN_PIPELINE",
+    triggers: ["event-driven", "event driven", "data pipeline", "event pipeline"],
+    ids: ["apigateway", "eventbridge", "sqs", "lambda", "s3", "sns"],
+  },
+  {
+    id: "CONTAINERIZED_MICROSERVICES",
+    triggers: ["microservice", "microservices", "container stack", "ecs stack"],
+    ids: ["cloudfront", "apigateway", "ecs", "rds", "sqs"],
+  },
+];
+
+export function magnetAwsIds(prompt: string, hits: AwsService[], limit = 10): string[] {
+  const hay = prompt.toLowerCase().trim();
+  if (!hay) return [];
+  const preset = PRESET_AWS_STACKS.find((row) =>
+    row.triggers.some((trigger) => hay.includes(trigger)),
+  );
+  if (preset) return preset.ids;
+  const scored = hits
+    .map((service) => ({ service, score: scoreAwsService(hay, service) }))
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((row) => row.service.id);
+  return scored;
 }
 
 export function awsToNode(service: AwsService): GraphNode {

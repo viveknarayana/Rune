@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface ServiceIconProps {
   src?: string;
@@ -8,6 +8,11 @@ interface ServiceIconProps {
 
 export function ServiceIcon({ src, label, size = 28 }: ServiceIconProps) {
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
   if (!src || failed) {
     return (
       <span

@@ -14,8 +14,8 @@ export const SHAPE_CONTENT: Record<
   { padX: number; padTop: number; padBottom: number }
 > = {
   cylinder: { padX: 18, padTop: 20, padBottom: 14 },
-  cache: { padX: 18, padTop: 16, padBottom: 14 },
-  queue: { padX: 16, padTop: 14, padBottom: 12 },
+  cache: { padX: 22, padTop: 12, padBottom: 12 },
+  queue: { padX: 18, padTop: 12, padBottom: 12 },
   cloud: { padX: 22, padTop: 18, padBottom: 14 },
   hexagon: { padX: 22, padTop: 14, padBottom: 14 },
   shield: { padX: 22, padTop: 16, padBottom: 16 },

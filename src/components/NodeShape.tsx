@@ -41,20 +41,27 @@ function Cylinder({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
 function Cache({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
   return (
     <>
-      <path
-        d="M8 10 C8 4 92 4 92 10 L92 26 C92 32 8 32 8 26 Z"
+      <rect
+        x="3"
+        y="5"
+        width="94"
+        height="46"
+        rx="12"
         fill={fill(accent, warning)}
         stroke={stroke(accent, selected)}
-        strokeWidth="1.4"
+        strokeWidth="1.6"
       />
-      <ellipse cx="50" cy="10" rx="42" ry="6" fill={withAlpha(accent, 0.3)} stroke={stroke(accent, selected)} strokeWidth="1.4" />
-      <path
-        d="M12 28 C12 34 88 34 88 28 L88 46 C88 52 12 52 12 46 Z"
-        fill={fill(accent, warning)}
-        stroke={stroke(accent, selected)}
-        strokeWidth="1.4"
+      <rect
+        x="3"
+        y="5"
+        width="14"
+        height="46"
+        rx="6"
+        fill={withAlpha(accent, 0.38)}
       />
-      <ellipse cx="50" cy="28" rx="38" ry="5.5" fill={withAlpha(accent, 0.22)} stroke={stroke(accent, selected)} strokeWidth="1.4" />
+      <ellipse cx="10" cy="16" rx="6" ry="3" fill={withAlpha(accent, 0.7)} />
+      <ellipse cx="10" cy="28" rx="6" ry="3" fill={withAlpha(accent, 0.5)} />
+      <ellipse cx="10" cy="40" rx="6" ry="3" fill={withAlpha(accent, 0.32)} />
     </>
   );
 }
@@ -62,19 +69,24 @@ function Cache({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
 function Queue({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
   return (
     <>
-      {[6, 22, 38].map((y) => (
-        <rect
-          key={y}
-          x="6"
-          y={y}
-          width="88"
-          height="12"
-          rx="3"
-          fill={fill(accent, warning)}
-          stroke={stroke(accent, selected)}
-          strokeWidth="1.4"
-        />
-      ))}
+      <rect
+        x="3"
+        y="5"
+        width="94"
+        height="46"
+        rx="12"
+        fill={fill(accent, warning)}
+        stroke={stroke(accent, selected)}
+        strokeWidth="1.6"
+      />
+      <rect
+        x="3"
+        y="5"
+        width="8"
+        height="46"
+        rx="4"
+        fill={withAlpha(accent, 0.42)}
+      />
     </>
   );
 }
