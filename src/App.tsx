@@ -1,6 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ColorStudio } from "./components/ColorStudio";
 import { CommandBar } from "./components/CommandBar";
 import { GlassCanvas } from "./components/GlassCanvas";
@@ -93,6 +93,9 @@ export default function App() {
   const [stack, setStack] = useState<AwsService[]>(() => searchAwsServices(""));
   const [jevBoosted, setJevBoosted] = useState(false);
   const magnetHold = useRef<string[]>([]);
+  const hudColRef = useRef<HTMLDivElement>(null);
+  const patternBlockRef = useRef<HTMLDivElement>(null);
+  const [magnetTop, setMagnetTop] = useState(260);
   const activeMagnetIds = useMemo(() => {
     const next = magnetAwsIds(prompt, stack);
     if (!prompt.trim()) {
@@ -126,6 +129,23 @@ export default function App() {
   const hasBoard = Boolean(decision?.nodes.length);
   const hudMode = hasBoard ? "board" : "idle";
   const hudSize = useHudSize(hudMode);
+
+  useLayoutEffect(() => {
+    if (hasBoard) return;
+    const col = hudColRef.current;
+    const block = patternBlockRef.current;
+    if (!col || !block) return;
+    const measure = () => {
+      const top = block.getBoundingClientRect().bottom - col.getBoundingClientRect().top;
+      setMagnetTop(Math.max(160, Math.round(top + 36)));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(col);
+    ro.observe(block);
+    return () => ro.disconnect();
+  }, [hasBoard, hudSize.width, hudSize.height]);
+
   const selected = decision?.nodes.find((n) => n.id === selectedId);
 
   useEffect(() => {
@@ -497,12 +517,24 @@ export default function App() {
       transition={{ type: "spring", stiffness: 170, damping: 24, mass: 0.8 }}
     >
       <div
+        ref={hudColRef}
         className={`relative flex min-h-0 flex-col overflow-hidden ${
           hasBoard ? "w-[300px] shrink-0 border-r border-sky-100/10" : "min-w-0 flex-1"
         }`}
       >
         <TideField variant={hasBoard ? "rail" : "idle"} />
-        <div id="titlebar" className="relative z-10 flex items-center justify-between px-3 pt-3 pb-2">
+        {!hasBoard && (
+          <div className="absolute inset-0 z-0">
+            <AwsPhysicsPile
+              activeIds={activeMagnetIds}
+              magnetTop={magnetTop}
+              onPick={(service) => {
+                void compile(`Add ${service.label}`);
+              }}
+            />
+          </div>
+        )}
+        <div id="titlebar" className="relative z-20 flex items-center justify-between px-3 pt-3 pb-2">
           <p className="font-mono text-[11px] tracking-[0.22em] uppercase text-sky-100/70">
             Rune
           </p>
@@ -538,7 +570,12 @@ export default function App() {
           </div>
         </div>
 
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col px-3 pb-3">
+        <div
+          className={`relative z-20 flex min-h-0 flex-1 flex-col px-3 pb-3 ${
+            hasBoard ? "" : "pointer-events-none"
+          }`}
+        >
+          <div className={hasBoard ? undefined : "pointer-events-auto"}>
           <CommandBar
             prompt={prompt}
             compiling={compiling}
@@ -548,14 +585,18 @@ export default function App() {
             onCompile={compile}
             inputRef={inputRef}
           />
+          </div>
           {compileError && (
-            <p className="mt-1.5 px-1 font-mono text-[10px] tracking-tight text-red-300/90">
+            <p className="pointer-events-auto mt-1.5 px-1 font-mono text-[10px] tracking-tight text-red-300/90">
               {compileError}
             </p>
           )}
 
           <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden">
-            <div className="shrink-0">
+            <div
+              ref={patternBlockRef}
+              className={`shrink-0 ${hasBoard ? "" : "pointer-events-auto"}`}
+            >
             <PatternStack
               rail={hasBoard}
               luminous
@@ -576,12 +617,7 @@ export default function App() {
                 }}
               />
             ) : (
-              <AwsPhysicsPile
-                activeIds={activeMagnetIds}
-                onPick={(service) => {
-                  void compile(`Add ${service.label}`);
-                }}
-              />
+              <div className="min-h-0 flex-1" />
             )}
           </div>
         </div>
