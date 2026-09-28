@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ColorStudio } from "./components/ColorStudio";
 import { CommandBar } from "./components/CommandBar";
 import { GlassCanvas } from "./components/GlassCanvas";
-import { LatencyHud } from "./components/LatencyHud";
 import { PatternStack } from "./components/PatternStack";
 import { AwsPhysicsPile } from "./components/AwsPhysicsPile";
 import { ServiceStack } from "./components/ServiceStack";
@@ -82,7 +81,6 @@ export default function App() {
   const [prompt, setPrompt] = useState("");
   const [compiling, setCompiling] = useState(false);
   const [decision, setDecision] = useState<CompilerResult | null>(null);
-  const [fps, setFps] = useState(120);
   const [palette, setPalette] = useState<ColorPalette>(DEFAULT_PALETTE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [linkingFrom, setLinkingFrom] = useState<string | null>(null);
@@ -135,23 +133,6 @@ export default function App() {
   useEffect(() => {
     if (decision) applyTheme(decision.theme_mode);
   }, [decision]);
-
-  useEffect(() => {
-    let frames = 0;
-    let last = performance.now();
-    let raf = 0;
-    const tick = (now: number) => {
-      frames += 1;
-      if (now - last >= 500) {
-        setFps(Math.round((frames * 1000) / (now - last)));
-        frames = 0;
-        last = now;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
 
   useEffect(() => {
     inputRef.current?.focus({ preventScroll: true });
@@ -593,7 +574,7 @@ export default function App() {
 
       {hasBoard && decision && (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col px-3 pt-3 pb-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="mb-2 flex items-center gap-2">
             <ColorStudio
               palette={palette}
               selectedLabel={selected?.label}
@@ -613,12 +594,6 @@ export default function App() {
                 );
               }}
               onReset={clearBoard}
-            />
-            <LatencyHud
-              jevMs={decision.execution_time_ms}
-              dagreMs={layout.layoutMs}
-              fps={fps}
-              source={decision.source}
             />
           </div>
           <div className="min-h-0 flex-1">

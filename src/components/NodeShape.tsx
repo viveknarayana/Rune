@@ -39,55 +39,75 @@ function Cylinder({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
 }
 
 function Cache({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
+  const line = stroke(accent, selected);
+  const body = fill(accent, warning);
   return (
     <>
-      <rect
-        x="3"
-        y="5"
-        width="94"
-        height="46"
-        rx="12"
-        fill={fill(accent, warning)}
-        stroke={stroke(accent, selected)}
-        strokeWidth="1.6"
-      />
-      <rect
-        x="3"
-        y="5"
-        width="14"
-        height="46"
-        rx="6"
+      <path
+        d="M6 17 L18 6 H94 L82 17 Z"
         fill={withAlpha(accent, 0.38)}
+        stroke={line}
+        strokeWidth="1.6"
+        strokeLinejoin="round"
       />
-      <ellipse cx="10" cy="16" rx="6" ry="3" fill={withAlpha(accent, 0.7)} />
-      <ellipse cx="10" cy="28" rx="6" ry="3" fill={withAlpha(accent, 0.5)} />
-      <ellipse cx="10" cy="40" rx="6" ry="3" fill={withAlpha(accent, 0.32)} />
+      <path
+        d="M82 17 L94 6 V40 L82 51 Z"
+        fill={withAlpha(accent, 0.16)}
+        stroke={line}
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6 17 H82 V51 H6 Z"
+        fill={body}
+        stroke={line}
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
     </>
   );
 }
 
 function Queue({ accent, selected, warning }: Omit<NodeShapeProps, "type">) {
   return (
-    <>
-      <rect
-        x="3"
-        y="5"
-        width="94"
-        height="46"
-        rx="12"
-        fill={fill(accent, warning)}
-        stroke={stroke(accent, selected)}
-        strokeWidth="1.6"
+    <rect
+      x="3"
+      y="5"
+      width="94"
+      height="46"
+      rx="12"
+      fill={fill(accent, warning)}
+      stroke={stroke(accent, selected)}
+      strokeWidth="1.6"
+    />
+  );
+}
+
+function TelemetryMark({ accent }: { accent: string }) {
+  return (
+    <svg
+      className="pointer-events-none absolute top-1/2 left-[7px] h-[72%] w-8 -translate-y-1/2"
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M10.2 6.4c3.2-2.6 8.4-2.6 11.6 0"
+        stroke={accent}
+        strokeWidth="1.7"
+        strokeLinecap="round"
       />
-      <rect
-        x="3"
-        y="5"
-        width="8"
-        height="46"
-        rx="4"
-        fill={withAlpha(accent, 0.42)}
+      <path
+        d="M12.2 8.8c2.1-1.7 5.5-1.7 7.6 0"
+        stroke={accent}
+        strokeWidth="1.7"
+        strokeLinecap="round"
       />
-    </>
+      <circle cx="16" cy="20" r="8.6" stroke={accent} strokeWidth="1.7" />
+      <ellipse cx="16" cy="20" rx="3.6" ry="8.6" stroke={accent} strokeWidth="1.55" />
+      <path d="M7.6 20h16.8M16 11.4v17.2" stroke={accent} strokeWidth="1.55" strokeLinecap="round" />
+      <circle cx="16" cy="12.2" r="1.55" fill={accent} />
+    </svg>
   );
 }
 
@@ -188,14 +208,18 @@ const SHAPES: Record<DiagramShape, typeof Rounded> = {
 };
 
 export function NodeShape({ type, accent, selected = false, warning = false }: NodeShapeProps) {
-  const Shape = SHAPES[shapeForType(type)];
+  const kind = shapeForType(type);
+  const Shape = SHAPES[kind];
   return (
-    <svg
-      className="pointer-events-none absolute inset-0 h-full w-full"
-      viewBox="0 0 100 56"
-      preserveAspectRatio="none"
-    >
-      <Shape accent={accent} selected={selected} warning={warning} />
-    </svg>
+    <>
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        viewBox="0 0 100 56"
+        preserveAspectRatio="none"
+      >
+        <Shape accent={accent} selected={selected} warning={warning} />
+      </svg>
+      {kind === "queue" && <TelemetryMark accent={accent} />}
+    </>
   );
 }
