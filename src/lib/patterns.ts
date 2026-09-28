@@ -1,4 +1,5 @@
 import { findInGraph } from "./catalog";
+import { insertBuffer, pickWriteBundle } from "./buffers";
 import { resolveAwsService } from "./aws-catalog";
 import type {
   CanvasState,
@@ -29,6 +30,14 @@ export function isPatternAction(action: string): action is PatternId {
   return PATTERN_IDS.includes(action as PatternId);
 }
 
+export type ApplyMode = "merge" | "inject" | "overlay" | "split" | "bridge";
+
+export interface PatternApplyOptions {
+  anchor?: string;
+  anchorTo?: string;
+  mode?: ApplyMode;
+}
+
 export interface DesignPattern {
   id: PatternId;
   label: string;
@@ -38,6 +47,10 @@ export interface DesignPattern {
   nodes: GraphNode[];
   edges: GraphEdge[];
   groups: GraphGroup[];
+  inject?: { extras: string[] };
+  overlay?: { insert: string[]; replica?: string };
+  split?: { write: string[]; read: string[] };
+  bridge?: { extras: string[]; intake: string; via?: string };
 }
 
 function icon(...names: string[]): string | undefined {
@@ -92,10 +105,12 @@ export const PATTERNS: DesignPattern[] = [
     groups: [
       {
         id: "evt_pipe",
-        label: "Event Pipeline",
-        memberIds: ["ingest_gw", "kafka", "flink", "clickhouse"],
+        label: "Stream Processor",
+        memberIds: ["kafka", "flink", "clickhouse"],
       },
     ],
+    inject: { extras: ["kafka", "flink", "clickhouse"] },
+    overlay: { insert: ["kafka"] },
   },
   {
     id: "PATTERN_READ_CACHE",
@@ -110,6 +125,7 @@ export const PATTERNS: DesignPattern[] = [
       "read latency",
       "caching",
       "cache hit",
+      "high-read caching",
       "redis",
       "memcached",
     ],
@@ -136,13 +152,9 @@ export const PATTERNS: DesignPattern[] = [
       { source: "cache_app", target: "pg_replica", label: "Cache Miss" },
       { source: "pg_primary", target: "pg_replica", label: "Replicate" },
     ],
-    groups: [
-      {
-        id: "read_path",
-        label: "Read Path",
-        memberIds: ["redis", "pg_replica"],
-      },
-    ],
+    groups: [],
+    overlay: { insert: ["redis"], replica: "pg_replica" },
+    inject: { extras: ["redis", "pg_replica", "cdn"] },
   },
   {
     id: "PATTERN_ASYNC_WORKER",
@@ -157,6 +169,8 @@ export const PATTERNS: DesignPattern[] = [
       "video encoding",
       "long-running",
       "async worker",
+      "asynchronous job",
+      "job worker",
       "job queue",
       "inference",
     ],
@@ -198,6 +212,9 @@ export const PATTERNS: DesignPattern[] = [
         memberIds: ["worker_a", "worker_b", "worker_c"],
       },
     ],
+    inject: {
+      extras: ["job_queue", "worker_a", "worker_b", "worker_c", "job_s3", "webhook"],
+    },
   },
   {
     id: "PATTERN_MICROSERVICE_MESH",
@@ -237,18 +254,7 @@ export const PATTERNS: DesignPattern[] = [
       { source: "order_svc", target: "order_db", label: "OLTP" },
       { source: "pay_svc", target: "pay_db", label: "OLTP" },
     ],
-    groups: [
-      {
-        id: "svc_tier",
-        label: "Services",
-        memberIds: ["auth_svc", "order_svc", "pay_svc"],
-      },
-      {
-        id: "data_tier",
-        label: "Dedicated DBs",
-        memberIds: ["auth_db", "order_db", "pay_db"],
-      },
-    ],
+    groups: [],
   },
   {
     id: "PATTERN_CQRS_FINTECH",
@@ -296,6 +302,11 @@ export const PATTERNS: DesignPattern[] = [
         memberIds: ["query_api", "read_db"],
       },
     ],
+    split: {
+      write: ["event_store", "event_bus"],
+      read: ["query_api", "read_db"],
+    },
+    inject: { extras: ["event_store", "event_bus", "query_api", "read_db"] },
   },
   {
     id: "PATTERN_SEARCH_INDEXING",
@@ -341,6 +352,12 @@ export const PATTERNS: DesignPattern[] = [
         memberIds: ["search_primary", "debezium", "opensearch"],
       },
     ],
+    bridge: {
+      extras: ["search_svc", "opensearch", "debezium"],
+      intake: "opensearch",
+      via: "debezium",
+    },
+    inject: { extras: ["search_svc", "opensearch", "debezium"] },
   },
 ];
 
@@ -511,20 +528,22 @@ function findRole(
   return best;
 }
 
-export function applyPattern(
+function applyMerge(
   current: CanvasState | undefined,
   pattern: DesignPattern,
   anchor?: string,
 ): CanvasState {
   if (!current?.nodes.length) {
-    return {
+    const stamped: CanvasState = {
       nodes: pattern.nodes.map((node) => ({ ...node })),
       edges: pattern.edges.map((edge) => ({ ...edge })),
-      groups: pattern.groups.map((group) => ({
-        ...group,
-        memberIds: [...group.memberIds],
-      })),
+      groups: [],
     };
+    return adoptPatternGroups(
+      stamped,
+      pattern,
+      new Map(pattern.nodes.map((node) => [node.id, node.id])),
+    );
   }
 
   const next = cloneState(current);
@@ -640,28 +659,400 @@ export function applyPattern(
     }
   }
 
+  return adoptPatternGroups(next, pattern, idMap);
+}
+
+function alreadyLinked(
+  edges: GraphEdge[],
+  source: string,
+  target: string,
+) {
+  return edges.some((edge) => edge.source === source && edge.target === target);
+}
+
+function materialize(
+  state: CanvasState,
+  pattern: DesignPattern,
+  ids: string[],
+): { state: CanvasState; idMap: Map<string, string>; added: string[] } {
+  const next = cloneState(state);
+  const idMap = new Map<string, string>();
+  const added: string[] = [];
+  for (const patternId of ids) {
+    const sample = pattern.nodes.find((node) => node.id === patternId);
+    if (!sample) continue;
+    const existing =
+      findInGraph(next.nodes, sample.label) ?? findInGraph(next.nodes, sample.id);
+    if (existing) {
+      idMap.set(patternId, existing.id);
+      continue;
+    }
+    const freshId = uniqueId(next, sample.id);
+    const { x: _x, y: _y, ...rest } = sample;
+    next.nodes.push({ ...rest, id: freshId });
+    idMap.set(patternId, freshId);
+    added.push(freshId);
+  }
+  for (const edge of pattern.edges) {
+    const source = idMap.get(edge.source);
+    const target = idMap.get(edge.target);
+    if (!source || !target) continue;
+    if (alreadyLinked(next.edges, source, target)) continue;
+    next.edges.push({ source, target, label: edge.label });
+  }
+  return {
+    state: adoptPatternGroups(next, pattern, idMap),
+    idMap,
+    added,
+  };
+}
+
+function isTrueCluster(memberIds: string[], state: CanvasState): boolean {
+  if (memberIds.length < 2) return false;
+  if (memberIds.length >= state.nodes.length) return false;
+  const set = new Set(memberIds);
+  const internal = state.edges.filter(
+    (edge) => set.has(edge.source) && set.has(edge.target),
+  );
+  const seen = new Set<string>([memberIds[0]]);
+  const queue = [memberIds[0]];
+  while (queue.length) {
+    const id = queue.shift()!;
+    for (const edge of internal) {
+      const next = edge.source === id ? edge.target : edge.target === id ? edge.source : null;
+      if (!next || seen.has(next)) continue;
+      seen.add(next);
+      queue.push(next);
+    }
+  }
+  if (internal.length && seen.size === memberIds.length) return true;
+
+  const types = new Set(
+    memberIds.map((id) => state.nodes.find((node) => node.id === id)?.type),
+  );
+  if (types.size !== 1) return false;
+  const inboundHits = new Map<string, number>();
+  for (const edge of state.edges) {
+    if (set.has(edge.target) && !set.has(edge.source)) {
+      inboundHits.set(edge.source, (inboundHits.get(edge.source) ?? 0) + 1);
+    }
+  }
+  const sharedParent = [...inboundHits.values()].some(
+    (count) => count === memberIds.length,
+  );
+  if (!sharedParent) return false;
+  const exclusiveOwners = memberIds.filter((id) =>
+    state.edges.some((edge) => {
+      if (edge.source !== id || set.has(edge.target)) return false;
+      return !memberIds.some(
+        (other) =>
+          other !== id &&
+          state.edges.some(
+            (item) => item.source === other && item.target === edge.target,
+          ),
+      );
+    }),
+  );
+  return exclusiveOwners.length !== memberIds.length;
+}
+
+function adoptPatternGroups(
+  state: CanvasState,
+  pattern: DesignPattern,
+  idMap: Map<string, string>,
+): CanvasState {
   for (const group of pattern.groups) {
-    const memberIds = group.memberIds
-      .map((id) => idMap.get(id))
-      .filter((id): id is string => Boolean(id));
-    if (memberIds.length < 2) continue;
-    next.groups.push({
-      id: uniqueId(next, group.id),
+    const memberIds = [
+      ...new Set(
+        group.memberIds
+          .map((id) => idMap.get(id))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (!isTrueCluster(memberIds, state)) continue;
+    const key = [...memberIds].sort().join("+");
+    if (
+      state.groups.some(
+        (existing) => [...existing.memberIds].sort().join("+") === key,
+      )
+    ) {
+      continue;
+    }
+    state.groups.push({
+      id: uniqueId(state, group.id),
       label: group.label,
       memberIds,
       color: group.color,
     });
   }
+  return state;
+}
 
-  if (added.length) {
-    next.groups.push({
-      id: uniqueId(next, pattern.id.toLowerCase()),
-      label: pattern.label,
-      memberIds: added,
+function injectExtras(pattern: DesignPattern): string[] {
+  if (pattern.inject?.extras.length) return pattern.inject.extras;
+  const skip = new Set(
+    [pattern.roles.client, pattern.roles.gateway, pattern.roles.app].filter(
+      Boolean,
+    ),
+  );
+  return pattern.nodes.map((node) => node.id).filter((id) => !skip.has(id));
+}
+
+function attachTarget(
+  pattern: DesignPattern,
+  extras: string[],
+): string | undefined {
+  const skip = new Set(
+    [pattern.roles.client, pattern.roles.gateway, pattern.roles.app].filter(
+      Boolean,
+    ),
+  );
+  const hit = pattern.edges.find(
+    (edge) => skip.has(edge.source) && extras.includes(edge.target),
+  );
+  return hit?.target ?? extras[0];
+}
+
+function applyInject(
+  current: CanvasState,
+  pattern: DesignPattern,
+  anchor?: string,
+): CanvasState {
+  const extras = injectExtras(pattern);
+  const { state, idMap } = materialize(current, pattern, extras);
+  const hook =
+    (anchor && anchor !== "auto" ? findInGraph(state.nodes, anchor) : undefined) ??
+    state.nodes.find((node) => node.type === "SERVICE") ??
+    state.nodes.find((node) => node.type === "GATEWAY") ??
+    state.nodes.find((node) => node.type === "SECURITY");
+  const entryKey = attachTarget(pattern, extras);
+  const entry = entryKey ? idMap.get(entryKey) : undefined;
+  if (hook && entry && hook.id !== entry && !alreadyLinked(state.edges, hook.id, entry)) {
+    state.edges.push({ source: hook.id, target: entry, label: "Enqueue" });
+  }
+  return state;
+}
+
+function applyOverlay(
+  current: CanvasState,
+  pattern: DesignPattern,
+  anchor?: string,
+): CanvasState {
+  const insertKey = pattern.overlay?.insert[0] ?? pattern.roles.cache;
+  const sample = pattern.nodes.find((node) => node.id === insertKey);
+  if (!sample) return applyInject(current, pattern, anchor);
+  let next = cloneState(current);
+  const writer = next.nodes.find(
+    (node) =>
+      node.type === "SERVICE" &&
+      next.edges.some((edge) => {
+        const target = next.nodes.find((item) => item.id === edge.target);
+        return edge.source === node.id && target?.type === "STORAGE";
+      }),
+  );
+  const prefer =
+    (anchor && anchor !== "auto"
+      ? findInGraph(next.nodes, anchor)?.id
+      : undefined) ?? writer?.id;
+  if (!findInGraph(next.nodes, sample.id) && !findInGraph(next.nodes, sample.label)) {
+    const fresh = { ...sample, id: uniqueId(next, sample.id) };
+    delete (fresh as { x?: number }).x;
+    delete (fresh as { y?: number }).y;
+    next.nodes.push(fresh);
+    next = insertBuffer(next, fresh, prefer);
+  }
+  const replicaKey = pattern.overlay?.replica;
+  const replicaSample = replicaKey
+    ? pattern.nodes.find((node) => node.id === replicaKey)
+    : undefined;
+  if (replicaSample && !findInGraph(next.nodes, replicaSample.label)) {
+    const replica = {
+      ...replicaSample,
+      id: uniqueId(next, replicaSample.id),
+    };
+    delete (replica as { x?: number }).x;
+    delete (replica as { y?: number }).y;
+    next.nodes.push(replica);
+    const bundle = pickWriteBundle(next, replica.id, prefer);
+    const producers = new Set(bundle.map((edge) => edge.source));
+    const stores = new Set(bundle.map((edge) => edge.target));
+    if (!producers.size) {
+      const app =
+        (prefer ? next.nodes.find((node) => node.id === prefer) : undefined) ??
+        next.nodes.find((node) => node.type === "SERVICE");
+      if (app) producers.add(app.id);
+      const db = next.nodes.find(
+        (node) => node.type === "STORAGE" && node.id !== replica.id,
+      );
+      if (db) stores.add(db.id);
+    }
+    for (const source of producers) {
+      if (!alreadyLinked(next.edges, source, replica.id)) {
+        next.edges.push({ source, target: replica.id, label: "Read" });
+      }
+    }
+    for (const store of stores) {
+      if (store !== replica.id && !alreadyLinked(next.edges, store, replica.id)) {
+        next.edges.push({ source: store, target: replica.id, label: "Replicate" });
+      }
+    }
+  }
+  return next;
+}
+
+function applySplit(
+  current: CanvasState,
+  pattern: DesignPattern,
+  anchor?: string,
+): CanvasState {
+  const write = pattern.split?.write ?? [];
+  const read = pattern.split?.read ?? [];
+  const extras = [...write, ...read];
+  if (!extras.length) return applyInject(current, pattern, anchor);
+  const { state, idMap } = materialize(current, pattern, extras);
+  const writer = state.nodes.find(
+    (node) =>
+      node.type === "SERVICE" &&
+      state.edges.some((edge) => {
+        const target = state.nodes.find((item) => item.id === edge.target);
+        return edge.source === node.id && target?.type === "STORAGE";
+      }),
+  );
+  const prefer =
+    (anchor && anchor !== "auto"
+      ? findInGraph(state.nodes, anchor)?.id
+      : undefined) ?? writer?.id;
+  const bundle = pickWriteBundle(state, extras[0] ?? "", prefer);
+  const producer =
+    (prefer ? state.nodes.find((node) => node.id === prefer) : undefined) ??
+    (bundle[0]
+      ? state.nodes.find((node) => node.id === bundle[0].source)
+      : undefined) ??
+    state.nodes.find((node) => node.type === "SERVICE") ??
+    state.nodes.find((node) => node.type === "GATEWAY");
+  const writeHead = write[0] ? idMap.get(write[0]) : undefined;
+  if (producer && writeHead && !alreadyLinked(state.edges, producer.id, writeHead)) {
+    state.edges.push({ source: producer.id, target: writeHead, label: "Command" });
+  }
+  if (bundle.length && writeHead) {
+    state.edges = state.edges.map((edge) =>
+      bundle.some(
+        (item) => item.source === edge.source && item.target === edge.target,
+      )
+        ? { ...edge, target: writeHead, label: "Command" }
+        : edge,
+    );
+  }
+  const gateway = state.nodes.find((node) => node.type === "GATEWAY");
+  const query = read[0] ? idMap.get(read[0]) : undefined;
+  if (gateway && query && gateway.id !== query && !alreadyLinked(state.edges, gateway.id, query)) {
+    state.edges.push({ source: gateway.id, target: query, label: "Query" });
+  }
+  return state;
+}
+
+function applyBridge(
+  current: CanvasState,
+  pattern: DesignPattern,
+  fromHint?: string,
+  toHint?: string,
+): CanvasState {
+  const extras = pattern.bridge?.extras ?? injectExtras(pattern);
+  const { state, idMap } = materialize(current, pattern, extras);
+  const from =
+    (fromHint && fromHint !== "auto"
+      ? findInGraph(state.nodes, fromHint)
+      : undefined) ??
+    state.nodes.find((node) => /replica|read/i.test(`${node.id} ${node.label}`)) ??
+    state.nodes.find((node) => node.type === "STORAGE");
+  const intakeKey = pattern.bridge?.intake ?? extras[extras.length - 1];
+  const viaKey = pattern.bridge?.via;
+  const to =
+    (toHint && toHint !== "auto" ? findInGraph(state.nodes, toHint) : undefined) ??
+    (intakeKey ? state.nodes.find((node) => node.id === idMap.get(intakeKey)) : undefined);
+  const via = viaKey
+    ? state.nodes.find((node) => node.id === idMap.get(viaKey))
+    : undefined;
+  if (from && via && from.id !== via.id && !alreadyLinked(state.edges, from.id, via.id)) {
+    state.edges.push({ source: from.id, target: via.id, label: "CDC" });
+  }
+  if (via && to && via.id !== to.id && !alreadyLinked(state.edges, via.id, to.id)) {
+    state.edges.push({ source: via.id, target: to.id, label: "Index" });
+  } else if (from && to && !via && from.id !== to.id && !alreadyLinked(state.edges, from.id, to.id)) {
+    state.edges.push({ source: from.id, target: to.id, label: "Sync" });
+  }
+  return state;
+}
+
+export function inferApplyMode(prompt: string): ApplyMode | undefined {
+  const p = prompt.trim();
+  if (
+    /(?:attach|graft)\b.{0,96}\b(?:to|onto|on)\b/i.test(p) ||
+    /(?:apply|use)\b.{0,64}pattern\b.{0,32}\b(?:to|onto|on)\b/i.test(p)
+  ) {
+    return "inject";
+  }
+  if (/\b(?:upgrade|wrap|overlay)\b/i.test(p)) return "overlay";
+  if (/\bsplit\b.{0,48}\b(?:into|with)\b/i.test(p)) return "split";
+  if (
+    /\b(?:cdc|debezium)\b/i.test(p) ||
+    /\b(?:sync|bridge)\b.{0,48}\bfrom\b/i.test(p) ||
+    /\bconnect\b.{0,64}\b(?:cdc|replica|indexing|opensearch|search)\b/i.test(p)
+  ) {
+    return "bridge";
+  }
+  return undefined;
+}
+
+export function hangSubsystemNodes(
+  state: CanvasState,
+  hangs: Array<{ extraId: string; fromId: string }>,
+  priorIds?: Iterable<string>,
+): CanvasState {
+  const next = cloneState(state);
+  const prior = new Set(priorIds ?? []);
+  for (const hang of hangs) {
+    if (hang.extraId === hang.fromId) continue;
+    if (!next.nodes.some((node) => node.id === hang.extraId)) continue;
+    if (!next.nodes.some((node) => node.id === hang.fromId)) continue;
+    if (prior.size && prior.has(hang.fromId)) {
+      next.edges = next.edges.filter(
+        (edge) =>
+          !(
+            edge.target === hang.extraId &&
+            prior.has(edge.source) &&
+            edge.source !== hang.fromId
+          ),
+      );
+    }
+    if (alreadyLinked(next.edges, hang.fromId, hang.extraId)) continue;
+    next.edges.push({
+      source: hang.fromId,
+      target: hang.extraId,
+      label: "Attach",
     });
   }
-
   return next;
+}
+
+export function applyPattern(
+  current: CanvasState | undefined,
+  pattern: DesignPattern,
+  options?: string | PatternApplyOptions,
+): CanvasState {
+  const opts: PatternApplyOptions =
+    typeof options === "string" ? { anchor: options } : (options ?? {});
+  if (!current?.nodes.length) {
+    return applyMerge(undefined, pattern);
+  }
+  const mode = opts.mode ?? "merge";
+  if (mode === "inject") return applyInject(current, pattern, opts.anchor);
+  if (mode === "overlay") return applyOverlay(current, pattern, opts.anchor);
+  if (mode === "split") return applySplit(current, pattern, opts.anchor);
+  if (mode === "bridge") {
+    return applyBridge(current, pattern, opts.anchor, opts.anchorTo);
+  }
+  return applyMerge(current, pattern, opts.anchor);
 }
 
 export function fallbackPatternAction(): TopologyAction {

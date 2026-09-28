@@ -17,8 +17,10 @@ import {
   applyPattern,
   fallbackPatternAction,
   getPattern,
+  inferApplyMode,
   isPatternAction,
   matchPattern,
+  type ApplyMode,
 } from "./patterns";
 import type { CanvasState, TopologyAction } from "./types";
 
@@ -78,7 +80,7 @@ export function processGraphAction(
   action: string,
   prompt: string,
   currentState?: CanvasState,
-  options?: { anchor?: string },
+  options?: { anchor?: string; mode?: ApplyMode; anchorTo?: string },
 ): { state: CanvasState; steps: string[] } {
   const mutations = parsePromptSteps(prompt);
   const patternStep = mutations.find((step) => step.kind === "apply_pattern");
@@ -104,10 +106,18 @@ export function processGraphAction(
     (isIntentAction(action) ? getIntent(action) : undefined) ||
     (other.length ? undefined : matchIntent(prompt));
 
+  const parsedMode =
+    (patternStep?.kind === "apply_pattern" &&
+      (patternStep.mode as ApplyMode | undefined)) ||
+    inferApplyMode(prompt) ||
+    options?.mode;
   const anchor =
     options?.anchor ??
     (patternStep?.kind === "apply_pattern" ? patternStep.anchor : undefined) ??
     (intentStep?.kind === "apply_intent" ? intentStep.anchor : undefined);
+  const anchorTo =
+    options?.anchorTo ??
+    (patternStep?.kind === "apply_pattern" ? patternStep.anchorTo : undefined);
   const merging = Boolean(currentState?.nodes.length);
   const caseText =
     (caseStep?.kind === "apply_case" && caseStep.case) ||
@@ -120,8 +130,24 @@ export function processGraphAction(
     state = applyIntent(merging ? state : undefined, intent, anchor);
     steps.push(merging ? `Merged ${intent.label}` : intent.label);
   } else if (pattern) {
-    state = applyPattern(merging ? state : undefined, pattern, anchor);
-    steps.push(merging ? `Merged ${pattern.label}` : `Built ${pattern.label}`);
+    state = applyPattern(merging ? state : undefined, pattern, {
+      anchor,
+      mode: merging ? parsedMode : undefined,
+      anchorTo,
+    });
+    const verb =
+      parsedMode === "inject"
+        ? "Attached"
+        : parsedMode === "overlay"
+          ? "Upgraded with"
+          : parsedMode === "split"
+            ? "Split into"
+            : parsedMode === "bridge"
+              ? "Bridged"
+              : merging
+                ? "Merged"
+                : "Built";
+    steps.push(`${verb} ${pattern.label}`);
   }
 
   if (other.length) {
@@ -132,7 +158,9 @@ export function processGraphAction(
               (item) =>
                 item.kind === "add" ||
                 item.kind === "connect" ||
-                item.kind === "attach",
+                item.kind === "disconnect" ||
+                item.kind === "attach" ||
+                item.kind === "insert_between",
             )
           ? emptyState()
           : applyPattern(undefined, getPattern(fallbackPatternAction())!);

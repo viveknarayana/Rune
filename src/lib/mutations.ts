@@ -1,3 +1,4 @@
+import { insertBetween, insertBuffer, isBufferNode, isBufferText } from "./buffers";
 import { bestInGraph, findInGraph, resolveComponent, toNode } from "./catalog";
 import { resolveNamedColor } from "./colors";
 import {
@@ -8,7 +9,7 @@ import {
   parseHandleCase,
   resolveCase,
 } from "./intents";
-import { applyPattern, getPattern, matchPattern, resolvePattern } from "./patterns";
+import { applyPattern, getPattern, inferApplyMode, matchPattern, resolvePattern, type ApplyMode } from "./patterns";
 import type { CanvasState, GraphEdge, GraphGroup, GraphNode } from "./types";
 
 export type Mutation =
@@ -17,12 +18,14 @@ export type Mutation =
   | { kind: "insert_after"; node: string; after: string }
   | { kind: "add"; node: string }
   | { kind: "attach"; node: string; target: string }
+  | { kind: "insert_between"; node: string; left: string; right: string }
   | { kind: "connect"; source: string; target: string; label?: string }
+  | { kind: "disconnect"; source: string; target: string }
   | { kind: "group"; members: string[]; label: string }
   | { kind: "ungroup"; target: string }
   | { kind: "color"; target: string; color: string }
   | { kind: "outage"; target?: string }
-  | { kind: "apply_pattern"; pattern: string; anchor?: string }
+  | { kind: "apply_pattern"; pattern: string; anchor?: string; mode?: string; anchorTo?: string }
   | { kind: "apply_intent"; intent: string; anchor?: string }
   | { kind: "apply_case"; case: string; anchor?: string };
 
@@ -64,6 +67,107 @@ export function parseMutation(prompt: string): Mutation | null {
       node: strip(after[1]),
       after: strip(after[2]),
     };
+  }
+
+  const injectPat = p.match(
+    /^(?:attach|graft|apply|use)\s+(?:an |a |the )?(.+?)\s+(?:pattern\s+)?(?:to|onto|on)\s+(?:the )?(.+?)(?:\s+node)?$/i,
+  );
+  if (injectPat) {
+    const hit = resolvePattern(injectPat[1], "named") ?? matchPattern(injectPat[1]);
+    if (hit) {
+      return {
+        kind: "apply_pattern",
+        pattern: hit.id,
+        mode: "inject",
+        anchor: strip(injectPat[2]),
+      };
+    }
+  }
+
+  const overlayPat = p.match(
+    /^(?:upgrade|wrap|overlay)\s+(?:this |the |our )?(.+?)\s+with\s+(?:the )?(.+?)(?:\s+pattern)?$/i,
+  );
+  if (overlayPat) {
+    const hit =
+      resolvePattern(overlayPat[2], "named") ??
+      matchPattern(overlayPat[2]) ??
+      resolvePattern(overlayPat[1], "named") ??
+      matchPattern(overlayPat[1]);
+    if (hit) {
+      return {
+        kind: "apply_pattern",
+        pattern: hit.id,
+        mode: "overlay",
+        anchor: strip(overlayPat[1]),
+      };
+    }
+  }
+
+  const splitPat = p.match(
+    /^split\s+(?:our |the |this )?(.+?)\s+into\s+(?:the )?(.+?)(?:\s+pattern)?$/i,
+  );
+  if (splitPat) {
+    const hit = resolvePattern(splitPat[2], "named") ?? matchPattern(splitPat[2]);
+    if (hit) {
+      return {
+        kind: "apply_pattern",
+        pattern: hit.id,
+        mode: "split",
+        anchor: strip(splitPat[1]),
+      };
+    }
+  }
+
+  const bridgePat =
+    p.match(
+      /^(?:connect|bridge|sync)\s+(?:our |the )?(.+?)\s+(?:pipeline |pattern )?(?:to sync |to |with )?(?:cdc |logs )?from\s+(?:the )?(.+)$/i,
+    ) ??
+    p.match(
+      /^(?:sync|index)\s+(?:cdc |logs )?(?:from\s+)?(?:the )?(.+?)\s+(?:into|to)\s+(?:the )?(.+)$/i,
+    );
+  if (bridgePat) {
+    const search =
+      matchPattern(bridgePat[1]) ??
+      resolvePattern("search") ??
+      getPattern("PATTERN_SEARCH_INDEXING");
+    if (search) {
+      return {
+        kind: "apply_pattern",
+        pattern: search.id,
+        mode: "bridge",
+        anchor: strip(bridgePat[2] ?? bridgePat[1]),
+      };
+    }
+  }
+
+  const disconnect =
+    p.match(
+      /^(?:disconnect|unlink|unwire)\s+(?:the )?(.+?)\s+(?:from|and|to)\s+(?:the )?(.+)$/i,
+    ) ??
+    p.match(
+      /^remove (?:the )?(?:link|edge|connection|arrow)(?: between)?\s+(?:the )?(.+?)\s+(?:and|to|from)\s+(?:the )?(.+)$/i,
+    );
+  if (disconnect) {
+    return {
+      kind: "disconnect",
+      source: strip(disconnect[1]),
+      target: strip(disconnect[2]),
+    };
+  }
+
+  const between = p.match(
+    /^(?:add|insert|put)\s+(?:a |an |the )?(.+?)\s+between\s+(?:the )?(.+?)\s+and\s+(?:the )?(.+)$/i,
+  );
+  if (between) {
+    const node = strip(between[1]);
+    if (!/^(connection|link|edge|arrow)$/i.test(node)) {
+      return {
+        kind: "insert_between",
+        node,
+        left: strip(between[2]),
+        right: strip(between[3]),
+      };
+    }
   }
 
   const connectTo = p.match(
@@ -161,7 +265,11 @@ export function parseMutation(prompt: string): Mutation | null {
 
   const whole = matchPattern(p);
   if (whole && p.split(/\s+/).length >= 2) {
-    return { kind: "apply_pattern", pattern: whole.id };
+    return {
+      kind: "apply_pattern",
+      pattern: whole.id,
+      mode: inferApplyMode(p),
+    };
   }
 
   const handleCase = parseHandleCase(p);
@@ -179,7 +287,7 @@ export function parseMutation(prompt: string): Mutation | null {
 }
 
 const NEXT_STEP =
-  "(?:add|insert|connect|link|remove|delete|group|wrap|put|square|box|frame|color|paint|ungroup|apply|use|then)";
+  "(?:add|insert|connect|link|disconnect|unlink|remove|delete|group|wrap|put|square|box|frame|color|paint|ungroup|apply|use|attach|upgrade|split|then)";
 
 const STEP_SPLIT = new RegExp(
   `;|\\n+|\\.\\s+(?=${NEXT_STEP})|\\s+then\\s+|\\s+and then\\s+|,\\s*and\\s+(?=${NEXT_STEP})|,\\s*(?=${NEXT_STEP})`,
@@ -209,7 +317,7 @@ function isPronoun(text: string) {
 }
 
 function bindFocus(mutation: Mutation, focus?: string): Mutation {
-  if (mutation.kind === "connect") {
+  if (mutation.kind === "connect" || mutation.kind === "disconnect") {
     const source =
       mutation.source === "$last" || isPronoun(mutation.source)
         ? (focus ?? mutation.source)
@@ -241,12 +349,16 @@ export function describeStep(mutation: Mutation): string {
       return `Add ${mutation.node}`;
     case "attach":
       return `Add ${mutation.node} → ${mutation.target}`;
+    case "insert_between":
+      return `Add ${mutation.node} between ${mutation.left} and ${mutation.right}`;
     case "insert_before":
       return `Add ${mutation.node} before ${mutation.before}`;
     case "insert_after":
       return `Add ${mutation.node} after ${mutation.after}`;
     case "connect":
       return `Connect ${mutation.source} → ${mutation.target}`;
+    case "disconnect":
+      return `Unlink ${mutation.source} → ${mutation.target}`;
     case "remove":
       return `Remove ${mutation.target}`;
     case "group":
@@ -258,7 +370,7 @@ export function describeStep(mutation: Mutation): string {
     case "outage":
       return `Outage on ${mutation.target ?? "service"}`;
     case "apply_pattern":
-      return `Apply ${getPattern(mutation.pattern)?.label ?? mutation.pattern}`;
+      return `${mutation.mode === "inject" ? "Attach" : mutation.mode === "overlay" ? "Upgrade with" : mutation.mode === "split" ? "Split into" : mutation.mode === "bridge" ? "Bridge" : "Apply"} ${getPattern(mutation.pattern)?.label ?? mutation.pattern}`;
     case "apply_intent":
       return getIntent(mutation.intent)?.label ?? mutation.intent;
     case "apply_case":
@@ -287,7 +399,10 @@ export function applySteps(
     else if (mutation.kind === "attach") {
       focus = findInGraph(state.nodes, mutation.node)?.id ?? focus;
     }
-    else if (mutation.kind === "connect") {
+    else if (mutation.kind === "insert_between") {
+      focus = findInGraph(state.nodes, mutation.node)?.id ?? focus;
+    }
+    else if (mutation.kind === "connect" || mutation.kind === "disconnect") {
       focus =
         findInGraph(state.nodes, mutation.source)?.id ??
         findInGraph(state.nodes, mutation.target)?.id ??
@@ -552,6 +667,9 @@ export function addNode(
   const next = clone(state);
   const node = createFresh(next, nodeText);
   if (!next.nodes.some((item) => item.id === node.id)) next.nodes.push(node);
+  if (isBufferNode(node) || isBufferText(nodeText)) {
+    return insertBuffer(next, node, preferId);
+  }
   return autoWire(next, node, preferId);
 }
 
@@ -566,11 +684,50 @@ export function attachNode(
   const target =
     bestInGraph(next.nodes, targetText) ?? createFresh(next, targetText);
   if (!next.nodes.some((item) => item.id === target.id)) next.nodes.push(target);
+  if (isBufferNode(node) || isBufferText(nodeText)) {
+    return insertBuffer(next, node, target.id);
+  }
   if (
     !next.edges.some((edge) => edge.source === node.id && edge.target === target.id)
   ) {
     next.edges.push({ source: node.id, target: target.id, label: "Link" });
   }
+  return next;
+}
+
+export function insertBetweenNodes(
+  state: CanvasState,
+  nodeText: string,
+  leftText: string,
+  rightText: string,
+): CanvasState {
+  const next = clone(state);
+  const node = createFresh(next, nodeText);
+  const left = findInGraph(next.nodes, leftText);
+  const right = findInGraph(next.nodes, rightText);
+  if (!left || !right) {
+    if (!next.nodes.some((item) => item.id === node.id)) next.nodes.push(node);
+    return insertBuffer(next, node);
+  }
+  return insertBetween(next, node, left.id, right.id);
+}
+
+export function disconnectNodes(
+  state: CanvasState,
+  sourceText: string,
+  targetText: string,
+): CanvasState {
+  const next = clone(state);
+  const source = findInGraph(next.nodes, sourceText);
+  const target = findInGraph(next.nodes, targetText);
+  if (!source || !target) return next;
+  next.edges = next.edges.filter(
+    (edge) =>
+      !(
+        (edge.source === source.id && edge.target === target.id) ||
+        (edge.source === target.id && edge.target === source.id)
+      ),
+  );
   return next;
 }
 
@@ -682,8 +839,17 @@ export function applyMutation(
       return addNode(state, mutation.node);
     case "attach":
       return attachNode(state, mutation.node, mutation.target);
+    case "insert_between":
+      return insertBetweenNodes(
+        state,
+        mutation.node,
+        mutation.left,
+        mutation.right,
+      );
     case "connect":
       return connectNodes(state, mutation.source, mutation.target, mutation.label);
+    case "disconnect":
+      return disconnectNodes(state, mutation.source, mutation.target);
     case "group":
       return groupNodes(state, mutation.members, mutation.label);
     case "ungroup":
@@ -694,7 +860,13 @@ export function applyMutation(
       return markOutage(state, mutation.target);
     case "apply_pattern": {
       const pattern = getPattern(mutation.pattern);
-      return pattern ? applyPattern(state, pattern, mutation.anchor) : state;
+      return pattern
+        ? applyPattern(state, pattern, {
+            anchor: mutation.anchor,
+            mode: mutation.mode as ApplyMode | undefined,
+            anchorTo: mutation.anchorTo,
+          })
+        : state;
     }
     case "apply_intent": {
       const intent = getIntent(mutation.intent);

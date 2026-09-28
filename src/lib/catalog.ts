@@ -22,7 +22,7 @@ export const CATALOG: CatalogEntry[] = [
   { id: "svc_b", label: "Inventory Service", type: "SERVICE", aliases: ["inventory service", "inventory"] },
   { id: "notify", label: "Notification Service", type: "SERVICE", aliases: ["notification", "notify"] },
   { id: "worker", label: "Async Workers", type: "SERVICE", aliases: ["workers", "worker", "consumer"] },
-  { id: "queue", label: "Event Bus / Queue", type: "TELEMETRY", aliases: ["event bus", "queue", "kafka", "sqs", "bus"] },
+  { id: "queue", label: "Event Bus / Queue", type: "TELEMETRY", aliases: ["event bus", "queue", "kafka", "sqs", "bus", "buffer", "stream"] },
   { id: "cache", label: "Redis Cache", type: "CACHE", aliases: ["redis cache", "redis", "cache"] },
   { id: "db", label: "Primary Database", type: "STORAGE", aliases: ["primary database", "database", "postgres", "mysql", "db"] },
   { id: "object", label: "Object Storage", type: "STORAGE", aliases: ["object storage", "s3", "blob"] },

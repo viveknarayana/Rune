@@ -5,7 +5,13 @@ import {
   processGraphAction,
 } from "../lib/graph-actions";
 import { isIntentAction } from "../lib/intents";
-import { isPatternAction } from "../lib/patterns";
+import { parsePromptSteps } from "../lib/mutations";
+import {
+  hangSubsystemNodes,
+  inferApplyMode,
+  isPatternAction,
+  type ApplyMode,
+} from "../lib/patterns";
 import type {
   CanvasState,
   CompilerResult,
@@ -39,8 +45,21 @@ const TOPOLOGY_CRITERIA = {
   INTENT_SEARCH:
     "User wants search, autocomplete, or catalog filters. Merge OpenSearch and CDC.",
   MUTATE_GRAPH:
-    "Mutate the current graph: add a named box, remove a node, connect, group, recolor, or apply a pattern into existing nodes. Do not wipe the graph.",
+    "Mutate the current graph: add a named box, remove a node, connect, group, recolor. Use a PATTERN_* instead if they attach, upgrade, split, or bridge an architecture. Do not wipe the graph.",
   SIMULATE_OUTAGE: "Mark a named node as failed without rebuilding the graph.",
+} as const;
+
+const APPLY_MODE_CRITERIA = {
+  merge:
+    "Default merge: map pattern roles onto existing boxes and add missing ones.",
+  inject:
+    "Attach a pattern as a side branch onto one named existing node. Do not remap that node into a gateway. Example: attach async workers to Fraud Engine.",
+  overlay:
+    "Upgrade an existing path in place: insert cache/buffer on the gateway or service to database edge, add replicas. Example: upgrade this API path with caching.",
+  split:
+    "Fork one write path into CQRS-style command vs query tracks. Example: split our DB path into CQRS.",
+  bridge:
+    "Connect two existing subsystems (CDC from replicas into search). Pick from_node as source and to_node as intake if needed.",
 } as const;
 
 const THEME_CRITERIA = {
@@ -97,6 +116,83 @@ function compileLocal(
   };
 }
 
+async function placeSubsystemWithJev(
+  prompt: string,
+  before: CanvasState,
+  after: CanvasState,
+): Promise<{ state: CanvasState; steps: string[] }> {
+  const apiKey = import.meta.env.VITE_TYPESAFE_API_KEY?.trim();
+  const added = after.nodes.filter(
+    (node) => !before.nodes.some((prior) => prior.id === node.id),
+  );
+  if (!apiKey || !added.length || !before.nodes.length) {
+    return { state: after, steps: [] };
+  }
+
+  const extras = added.slice(0, 8);
+  const priorIds = before.nodes.map((node) => node.id);
+  const client = new TypeSafeClient({
+    apiKey,
+    defaultModel: "jev-1.13.0",
+    dangerouslyAllowBrowser: true,
+  });
+
+  const hangChoicesFor = (extraId: string) => {
+    const others = extras.filter((node) => node.id !== extraId);
+    return [
+      ["keep", "Recipe already attached this extra correctly. Rare — only if the inbound edge is already the named producer."],
+      ...before.nodes.map((node) => [
+        node.id,
+        `Existing: ${node.label} [${node.type}] id=${node.id}`,
+      ]),
+      ...others.map((node) => [
+        node.id,
+        `New extra: ${node.label} [${node.type}] id=${node.id}`,
+      ]),
+    ] as [string, string][];
+  };
+
+  try {
+    const decision = await client.systemOne({
+      state: {
+        user_prompt: prompt,
+        existing_nodes: before.nodes.map((n) => `${n.id}:${n.label}:${n.type}`),
+        extras: extras.map((n) => `${n.id}:${n.label}:${n.type}`),
+        existing_edges: before.edges.map((e) => `${e.source}->${e.target}`),
+      },
+      questions: Object.fromEntries(
+        extras.map((node) => [
+          `hang_${node.id}`,
+          {
+            type: "choice" as const,
+            instructions: `Attach ${node.label} [${node.type}] onto the graph. Prefer the named existing producer (Fraud Engine, Order Service, API). Use another extra only for internal order (queue → worker → store). Do not pick keep unless the recipe already hangs this extra off the right board node.`,
+            criteria: Object.fromEntries(hangChoicesFor(node.id)),
+          },
+        ]),
+      ),
+    });
+
+    const answers = decision.answers as Record<string, { choice?: string }>;
+    const hangs = extras.flatMap((node) => {
+      const picked = answers[`hang_${node.id}`]?.choice;
+      if (!picked || picked === "keep") return [];
+      return [{ extraId: node.id, fromId: picked }];
+    });
+    if (!hangs.length) return { state: after, steps: [] };
+
+    const state = hangSubsystemNodes(after, hangs, priorIds);
+    const steps = hangs.flatMap((hang) => {
+      const extra = state.nodes.find((node) => node.id === hang.extraId);
+      const from = state.nodes.find((node) => node.id === hang.fromId);
+      if (!extra || !from) return [];
+      return [`Jev hung ${extra.label} off ${from.label}`];
+    });
+    return { state, steps };
+  } catch {
+    return { state: after, steps: [] };
+  }
+}
+
 async function evaluateWithJev(prompt: string, currentState?: CanvasState) {
   const apiKey = import.meta.env.VITE_TYPESAFE_API_KEY?.trim();
   if (!apiKey) return null;
@@ -131,7 +227,7 @@ async function evaluateWithJev(prompt: string, currentState?: CanvasState) {
       topology_action: {
         type: "choice",
         instructions: isMutation
-          ? "If the user states a goal or a situation (faster, handle case like Black Friday, payment failure, EU users, uploads), pick the closest INTENT_*. If they name an architecture, pick PATTERN_*. Merge — do not wipe. Use MUTATE_GRAPH for add/remove/color/connect. Use SIMULATE_OUTAGE for failures."
+          ? "If they attach/apply a named pattern to a node, pick that PATTERN_*. If they upgrade/wrap a path, pick PATTERN_READ_CACHE or the named pattern. If they split into CQRS, pick PATTERN_CQRS_FINTECH. If they sync CDC/search, pick PATTERN_SEARCH_INDEXING. Goals without a named architecture: INTENT_*. Single add/connect/remove: MUTATE_GRAPH. Never wipe."
           : "Map goals to INTENT_* (faster, reliable, secure, writes, async, search). Map named architectures to PATTERN_*. MUTATE_GRAPH only for a single named box.",
         criteria: TOPOLOGY_CRITERIA,
       },
@@ -140,8 +236,20 @@ async function evaluateWithJev(prompt: string, currentState?: CanvasState) {
             pattern_anchor: {
               type: "choice",
               instructions:
-                "Choose exactly one existing node id from the criteria as the attach point for new pattern, intent, or harden nodes. Every node on the board is listed. Prefer the public request path (client, gateway, producer) for security/CDN/WAF. Use auto only if no node is a better fit.",
+                "Existing node the change hangs off of. Inject: the producer (Fraud Engine, Order Service). Overlay/split: the service or gateway on that path. Bridge: the FROM side (read replica / primary DB). Prefer SERVICE/GATEWAY/SECURITY over STORAGE unless they named a replica or DB. Use auto only if no node is a better fit.",
               criteria: Object.fromEntries(nodeChoices),
+            },
+            pattern_anchor_to: {
+              type: "choice",
+              instructions:
+                "Only for bridge: the intake node (OpenSearch, search service, Debezium). For inject/overlay/split pick auto.",
+              criteria: Object.fromEntries(nodeChoices),
+            },
+            apply_mode: {
+              type: "choice",
+              instructions:
+                "How to apply a pattern onto the existing board. inject = side branch. overlay = insert on an existing edge. split = fork write vs read. bridge = CDC/connect two subsystems. merge = default role map. Use merge for INTENTS and for MUTATE_GRAPH.",
+              criteria: APPLY_MODE_CRITERIA,
             },
           }
         : {}),
@@ -177,7 +285,20 @@ export async function evaluateJevSystemDesign(
     const decision = await evaluateWithJev(prompt, currentState);
     if (!decision) return local;
 
-    const rawAction = decision.answers.topology_action.choice as TopologyAction;
+    const answers = decision.answers as {
+      pattern_anchor?: { choice?: string };
+      pattern_anchor_to?: { choice?: string };
+      apply_mode?: { choice?: string };
+    };
+    const localStep = parsePromptSteps(prompt).find(
+      (step) => step.kind === "apply_pattern",
+    );
+    const parsedAction =
+      localStep?.kind === "apply_pattern" && isPatternAction(localStep.pattern)
+        ? localStep.pattern
+        : undefined;
+    const rawAction = (parsedAction ??
+      decision.answers.topology_action.choice) as TopologyAction;
     const keepPattern =
       isPatternAction(rawAction) ||
       isIntentAction(rawAction) ||
@@ -186,14 +307,28 @@ export async function evaluateJevSystemDesign(
       currentState?.nodes.length && !isExplicitRebuild(prompt) && !keepPattern
         ? "MUTATE_GRAPH"
         : rawAction;
-    const picked = (
-      decision.answers as { pattern_anchor?: { choice?: string } }
-    ).pattern_anchor?.choice;
+    const picked = answers.pattern_anchor?.choice;
+    const pickedTo = answers.pattern_anchor_to?.choice;
     const anchor =
-      picked && picked !== "auto" ? picked : options?.anchor;
-    const { state, steps } = processGraphAction(action, prompt, currentState, {
+      (localStep?.kind === "apply_pattern" && localStep.anchor) ||
+      (picked && picked !== "auto" ? picked : undefined) ||
+      options?.anchor;
+    const anchorTo =
+      (localStep?.kind === "apply_pattern" && localStep.anchorTo) ||
+      (pickedTo && pickedTo !== "auto" ? pickedTo : undefined);
+    const mode = ((localStep?.kind === "apply_pattern" && localStep.mode) ||
+      inferApplyMode(prompt) ||
+      answers.apply_mode?.choice) as ApplyMode | undefined;
+    let { state, steps } = processGraphAction(action, prompt, currentState, {
       anchor,
+      mode,
+      anchorTo,
     });
+    if (currentState?.nodes.length) {
+      const placed = await placeSubsystemWithJev(prompt, currentState, state);
+      state = placed.state;
+      steps = [...steps, ...placed.steps];
+    }
 
     return {
       ...state,

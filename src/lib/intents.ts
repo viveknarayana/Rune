@@ -1,3 +1,4 @@
+import { insertBuffer, isBufferText } from "./buffers";
 import { bestInGraph, findInGraph, resolveComponent, toNode } from "./catalog";
 import {
   applyPattern,
@@ -174,6 +175,10 @@ function addExtra(state: CanvasState, name: string, preferId?: string): CanvasSt
         type: "CUSTOM",
       };
   if (!next.nodes.some((item) => item.id === node.id)) next.nodes.push({ ...node });
+
+  if (isBufferText(`${node.id} ${node.label} ${name}`)) {
+    return insertBuffer(next, next.nodes.find((item) => item.id === node.id)!, preferId);
+  }
 
   const hook = requestPathHook(next.nodes, next.edges, node.id, preferId);
   if (!hook) return next;
