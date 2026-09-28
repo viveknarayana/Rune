@@ -11,7 +11,7 @@ import {
 } from "../lib/layout-engine";
 import { contentBox } from "../lib/shapes";
 import type { GraphEdge, GraphGroup } from "../lib/types";
-import { NodeMenu, type NodeMenuAction } from "./NodeMenu";
+import { NodeMenu, type NodeLink, type NodeMenuAction } from "./NodeMenu";
 
 const MIN_ZOOM = 0.12;
 const MAX_ZOOM = 3.5;
@@ -34,8 +34,18 @@ interface CanvasProps {
   onSelect?: (id: string | null) => void;
   onNodeMove?: (id: string, x: number, y: number) => void;
   linkingFrom?: string | null;
+  selectedEdge?: { source: string; target: string } | null;
   onNodeAction?: (id: string, action: NodeMenuAction) => void;
   onConnectNodes?: (source: string, target: string) => void;
+  onDisconnect?: (source: string, target: string) => void;
+  onSelectEdge?: (edge: { source: string; target: string } | null) => void;
+}
+
+function worldToScreen(x: number, y: number, camera: Camera) {
+  return {
+    x: x * camera.zoom + camera.x,
+    y: y * camera.zoom + camera.y,
+  };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -94,8 +104,11 @@ export function GlassCanvas({
   onSelect,
   onNodeMove,
   linkingFrom,
+  selectedEdge,
   onNodeAction,
   onConnectNodes,
+  onDisconnect,
+  onSelectEdge,
 }: CanvasProps) {
   const springConfig = {
     type: "spring" as const,
@@ -257,6 +270,7 @@ export function GlassCanvas({
       onPointerDown={(event) => {
         if (event.button !== 0 && event.button !== 1) return;
         if ((event.target as HTMLElement).closest("[data-node-id]")) return;
+        if ((event.target as HTMLElement).closest("[data-hud-overlay]")) return;
         event.preventDefault();
         onSelect?.(null);
         panRef.current = {
@@ -308,10 +322,10 @@ export function GlassCanvas({
         })}
 
         <svg
-          className="pointer-events-none absolute z-10 overflow-visible"
+          className="absolute z-10 overflow-visible"
           width={bounds.width}
           height={bounds.height}
-          style={{ left: bounds.minX, top: bounds.minY }}
+          style={{ left: bounds.minX, top: bounds.minY, pointerEvents: "none" }}
         >
           <defs>
             {edges.map((edge, idx) => {
@@ -347,6 +361,9 @@ export function GlassCanvas({
                 target,
                 edgeLane(edges, idx, (id) => nodeMap.get(id)),
               );
+              const hot =
+                selectedEdge?.source === edge.source &&
+                selectedEdge?.target === edge.target;
               const isRed =
                 isAnomaly &&
                 (target.type === "SECURITY" || target.label.includes("OUTAGE"));
@@ -356,24 +373,39 @@ export function GlassCanvas({
 
               return (
                 <g key={`${edge.source}-${edge.target}-${idx}`}>
+                  <path
+                    d={path.d}
+                    stroke="transparent"
+                    strokeWidth="14"
+                    fill="none"
+                    style={{ pointerEvents: "stroke", cursor: "pointer" }}
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      event.preventDefault();
+                      if (hot) onSelectEdge?.(null);
+                      else onSelectEdge?.({ source: edge.source, target: edge.target });
+                    }}
+                  />
                   <motion.path
                     d={path.d}
                     stroke={color}
-                    strokeWidth="1.5"
+                    strokeWidth={hot ? 2.4 : 1.5}
                     fill="none"
                     markerEnd={`url(#arrow-${idx})`}
                     initial={{ pathLength: 0 }}
                     animate={{ pathLength: 1 }}
                     transition={{ duration: 0.35, ease: "easeOut" }}
+                    style={{ pointerEvents: "none" }}
                   />
                   {edge.label && (
                     <text
                       x={path.labelX}
                       y={path.labelY}
-                      fill="#71717A"
+                      fill={hot ? "#E4E4E7" : "#71717A"}
                       fontSize="10"
                       textAnchor="middle"
                       className="font-mono"
+                      style={{ pointerEvents: "none" }}
                     >
                       {edge.label}
                     </text>
@@ -436,13 +468,6 @@ export function GlassCanvas({
                 }}
                 className={`select-none touch-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
               >
-                {selected && (
-                  <NodeMenu
-                    linking={linkingFrom === node.id}
-                    isOutage={node.label.includes("OUTAGE")}
-                    onAction={(action) => onNodeAction?.(node.id, action)}
-                  />
-                )}
                 <NodeShape
                   type={node.type}
                   accent={accent}
@@ -488,6 +513,93 @@ export function GlassCanvas({
           })}
         </div>
       </div>
+
+      {(() => {
+        const picked = displayNodes.find(
+          (node) => node.id === selectedId && draggingId !== node.id,
+        );
+        if (!picked) return null;
+        const links: NodeLink[] = [];
+        for (const edge of edges) {
+          if (edge.source === picked.id) {
+            const other = nodeMap.get(edge.target);
+            if (other) {
+              links.push({
+                source: edge.source,
+                target: edge.target,
+                label: other.label,
+                dir: "out",
+              });
+            }
+          } else if (edge.target === picked.id) {
+            const other = nodeMap.get(edge.source);
+            if (other) {
+              links.push({
+                source: edge.source,
+                target: edge.target,
+                label: other.label,
+                dir: "in",
+              });
+            }
+          }
+        }
+        const anchor = worldToScreen(
+          picked.x + picked.width + 12,
+          picked.y,
+          camera,
+        );
+        return (
+          <div
+            data-hud-overlay
+            className="no-drag pointer-events-auto absolute z-50"
+            style={{
+              left: clamp(anchor.x, 8, Math.max(8, viewport.width - 240)),
+              top: clamp(anchor.y, 8, Math.max(8, viewport.height - 220)),
+            }}
+          >
+            <NodeMenu
+              name={picked.label}
+              kind={picked.type}
+              linking={linkingFrom === picked.id}
+              isOutage={picked.label.includes("OUTAGE")}
+              links={links}
+              onAction={(action) => onNodeAction?.(picked.id, action)}
+            />
+          </div>
+        );
+      })()}
+      {selectedEdge &&
+        (() => {
+          const source = nodeMap.get(selectedEdge.source);
+          const target = nodeMap.get(selectedEdge.target);
+          if (!source || !target) return null;
+          const idx = edges.findIndex(
+            (edge) =>
+              edge.source === selectedEdge.source &&
+              edge.target === selectedEdge.target,
+          );
+          const path = edgePath(
+            source,
+            target,
+            edgeLane(edges, Math.max(idx, 0), (id) => nodeMap.get(id)),
+          );
+          const at = worldToScreen(path.labelX, path.labelY + 16, camera);
+          return (
+            <button
+              type="button"
+              data-hud-overlay
+              className="no-drag absolute z-50 -translate-x-1/2 -translate-y-1/2 rounded-full border border-red-300/25 bg-[#1a1014]/90 px-2.5 py-1 font-mono text-[10px] tracking-tight text-red-200 shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur-md hover:bg-red-500/20"
+              style={{ left: at.x, top: at.y }}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                onDisconnect?.(selectedEdge.source, selectedEdge.target);
+              }}
+            >
+              Remove link
+            </button>
+          );
+        })()}
 
       <div className="no-drag absolute right-2 bottom-2 z-40 flex items-center gap-1 rounded-lg border border-white/10 bg-[#0F1015]/90 px-1 py-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)]">
         <button

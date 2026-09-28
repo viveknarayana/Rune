@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 export type HudMode = "idle" | "search" | "board";
 
 export const HUD_SIZE: Record<HudMode, { width: number; height: number }> = {
-  idle: { width: 680, height: 520 },
-  search: { width: 680, height: 520 },
+  idle: { width: 820, height: 640 },
+  search: { width: 820, height: 640 },
   board: { width: 1100, height: 700 },
 };
 

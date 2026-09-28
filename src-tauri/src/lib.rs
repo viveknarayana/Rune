@@ -22,7 +22,7 @@ fn target_for_mode(window: &WebviewWindow, mode: &str) -> (f64, f64) {
             (work_w * 0.62).clamp(960.0, 1180.0),
             (work_h * 0.64).clamp(620.0, 760.0),
         ),
-        _ => (680.0, 520.0),
+        _ => (820.0, 640.0),
     }
 }
 

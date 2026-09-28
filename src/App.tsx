@@ -6,9 +6,12 @@ import { CommandBar } from "./components/CommandBar";
 import { GlassCanvas } from "./components/GlassCanvas";
 import { LatencyHud } from "./components/LatencyHud";
 import { PatternStack } from "./components/PatternStack";
+import { AwsPhysicsPile } from "./components/AwsPhysicsPile";
 import { ServiceStack } from "./components/ServiceStack";
+import { TideField } from "./components/TideField";
 import {
   searchAwsServices,
+  magnetAwsIds,
   type AwsService,
 } from "./lib/aws-catalog";
 import { rankAwsWithJev } from "./services/jev-search";
@@ -83,8 +86,22 @@ export default function App() {
   const [palette, setPalette] = useState<ColorPalette>(DEFAULT_PALETTE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [linkingFrom, setLinkingFrom] = useState<string | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<{
+    source: string;
+    target: string;
+  } | null>(null);
   const [stack, setStack] = useState<AwsService[]>(() => searchAwsServices(""));
   const [jevBoosted, setJevBoosted] = useState(false);
+  const magnetHold = useRef<string[]>([]);
+  const activeMagnetIds = useMemo(() => {
+    const next = magnetAwsIds(prompt, stack);
+    if (!prompt.trim()) {
+      magnetHold.current = [];
+      return [];
+    }
+    if (next.length) magnetHold.current = next;
+    return magnetHold.current;
+  }, [prompt, stack]);
   const [historyTick, setHistoryTick] = useState(0);
   const decisionRef = useRef<CompilerResult | null>(null);
   const pastRef = useRef<(CompilerResult | null)[]>([]);
@@ -142,7 +159,7 @@ export default function App() {
 
   useEffect(() => {
     const query = prompt.trim();
-    const local = searchAwsServices(query, query ? 36 : 12);
+    const local = searchAwsServices(query, query ? 48 : 72);
     setStack(local);
     setJevBoosted(false);
     if (!query) return;
@@ -194,6 +211,7 @@ export default function App() {
     commitDecision((prev) => (prev?.nodes.length ? null : prev));
     setSelectedId(null);
     setLinkingFrom(null);
+    setSelectedEdge(null);
   }, [commitDecision]);
 
   const redo = useCallback(() => {
@@ -267,6 +285,17 @@ export default function App() {
         );
         return;
       }
+      if (action.type === "disconnect") {
+        patchGraph(
+          applyMutation(state, {
+            kind: "disconnect",
+            source: action.source,
+            target: action.target,
+          }),
+          `unlink ${action.source} ${action.target}`,
+        );
+        return;
+      }
       setLinkingFrom((current) => (current === id ? null : id));
     },
     [decision, patchGraph],
@@ -288,6 +317,26 @@ export default function App() {
       );
       setLinkingFrom(null);
       setSelectedId(target);
+      setSelectedEdge(null);
+    },
+    [decision, patchGraph],
+  );
+
+  const handleDisconnect = useCallback(
+    (source: string, target: string) => {
+      if (!decision) return;
+      patchGraph(
+        applyMutation(
+          {
+            nodes: decision.nodes,
+            edges: decision.edges,
+            groups: decision.groups ?? [],
+          },
+          { kind: "disconnect", source, target },
+        ),
+        `unlink ${source} ${target}`,
+      );
+      setSelectedEdge(null);
     },
     [decision, patchGraph],
   );
@@ -368,16 +417,30 @@ export default function App() {
         return;
       }
       if (event.key === "Escape") {
+        if (selectedId || selectedEdge || linkingFrom) {
+          setSelectedId(null);
+          setSelectedEdge(null);
+          setLinkingFrom(null);
+          return;
+        }
         try {
           await getCurrentWindow().hide();
         } catch {
           // Browser preview has no Tauri window.
         }
       }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        const tag = (event.target as HTMLElement)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        if (selectedEdge) {
+          event.preventDefault();
+          handleDisconnect(selectedEdge.source, selectedEdge.target);
+        }
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [undo, redo, selectedId, selectedEdge, linkingFrom, handleDisconnect]);
 
   function updatePalette(type: NodeTypeName, color: string) {
     const next = { ...palette, [type]: color };
@@ -396,8 +459,8 @@ export default function App() {
       }
     >
     <motion.div
-      className={`hud-shell surface flex min-h-0 overflow-hidden rounded-2xl ${
-        hasBoard ? "flex-row" : "flex-col"
+      className={`hud-shell surface relative flex min-h-0 overflow-hidden rounded-2xl ${
+        hasBoard ? "hud-shell--board flex-row" : "hud-shell--search flex-col"
       }`}
       initial={false}
       animate={
@@ -408,31 +471,36 @@ export default function App() {
       transition={{ type: "spring", stiffness: 170, damping: 24, mass: 0.8 }}
     >
       <div
-        className={`flex min-h-0 flex-col ${
-          hasBoard ? "w-[268px] shrink-0 border-r border-white/8" : "min-w-0 flex-1"
+        className={`relative flex min-h-0 flex-col overflow-hidden ${
+          hasBoard ? "w-[268px] shrink-0 border-r border-sky-100/10" : "min-w-0 flex-1"
         }`}
       >
-        <div id="titlebar" className="flex items-center justify-between px-3 pt-3 pb-2">
-          <p className="font-mono text-[11px] tracking-[0.22em] text-zinc-500 uppercase">
+        <TideField variant={hasBoard ? "rail" : "idle"} />
+        <div id="titlebar" className="relative z-10 flex items-center justify-between px-3 pt-3 pb-2">
+          <p className="font-mono text-[11px] tracking-[0.22em] uppercase text-sky-100/70">
             Rune
           </p>
           <div className="no-drag flex items-center gap-2">
-            <button
-              type="button"
-              disabled={!canUndo}
-              onClick={undo}
-              className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
-            >
-              Undo
-            </button>
-            <button
-              type="button"
-              disabled={!canRedo}
-              onClick={redo}
-              className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
-            >
-              Redo
-            </button>
+            {hasBoard && (
+              <>
+                <button
+                  type="button"
+                  disabled={!canUndo}
+                  onClick={undo}
+                  className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
+                >
+                  Undo
+                </button>
+                <button
+                  type="button"
+                  disabled={!canRedo}
+                  onClick={redo}
+                  className="font-mono text-[10px] tracking-tight text-zinc-500 hover:text-zinc-200 disabled:opacity-25"
+                >
+                  Redo
+                </button>
+              </>
+            )}
             <button
               type="button"
               disabled={!hasBoard}
@@ -444,47 +512,45 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col px-3 pb-3">
           <CommandBar
             prompt={prompt}
             compiling={compiling}
-            canUndo={canUndo}
+            luminous
             onPromptChange={setPrompt}
             onCompile={compile}
-            onUndo={undo}
             inputRef={inputRef}
           />
 
-          {hasBoard && decision?.steps && decision.steps.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1">
-              {decision.steps.map((step, index) => (
-                <span
-                  key={`${step}-${index}`}
-                  className="rounded-md border border-white/8 px-1.5 py-0.5 font-mono text-[9px] tracking-tight text-zinc-500"
-                >
-                  {index + 1}. {step}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-3 min-h-0 flex-1">
+          <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="shrink-0">
             <PatternStack
               rail={hasBoard}
+              luminous
               onPick={(pattern) => {
                 void compile(`Apply ${pattern.id}`).then(() => setPrompt(""));
               }}
             />
-            <ServiceStack
-              services={stack}
-              query={prompt}
-              jevBoosted={jevBoosted}
-              expanded={!hasBoard}
-              rail={hasBoard}
-              onPick={(service) => {
-                void compile(`Add ${service.label}`).then(() => setPrompt(""));
-              }}
-            />
+            </div>
+            {hasBoard ? (
+              <ServiceStack
+                services={stack}
+                query={prompt}
+                jevBoosted={jevBoosted}
+                expanded={false}
+                rail
+                onPick={(service) => {
+                  void compile(`Add ${service.label}`).then(() => setPrompt(""));
+                }}
+              />
+            ) : (
+              <AwsPhysicsPile
+                activeIds={activeMagnetIds}
+                onPick={(service) => {
+                  void compile(`Add ${service.label}`);
+                }}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -528,11 +594,23 @@ export default function App() {
               stiffness={decision.stiffness}
               palette={palette}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              selectedEdge={selectedEdge}
+              onSelect={(id) => {
+                setSelectedId(id);
+                if (id) setSelectedEdge(null);
+              }}
+              onSelectEdge={(edge) => {
+                setSelectedEdge(edge);
+                if (edge) {
+                  setSelectedId(null);
+                  setLinkingFrom(null);
+                }
+              }}
               onNodeMove={moveNode}
               linkingFrom={linkingFrom}
               onNodeAction={handleNodeAction}
               onConnectNodes={handleConnectNodes}
+              onDisconnect={handleDisconnect}
             />
           </div>
         </div>

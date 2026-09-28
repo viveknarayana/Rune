@@ -23,9 +23,9 @@ export function ServiceStack({
 }: ServiceStackProps) {
   const searching = Boolean(query.trim());
   const lifted = searching
-    ? services.slice(0, 36)
-    : services.slice(0, expanded ? 12 : 10);
-  const iconSize = rail ? 28 : searching ? 44 : 32;
+    ? services.slice(0, 48)
+    : services.slice(0, expanded ? 36 : rail ? 12 : 20);
+  const iconSize = rail ? 26 : 32;
 
   return (
     <div className={`no-drag flex min-h-0 flex-col ${expanded ? "flex-1" : ""}`}>
@@ -34,7 +34,9 @@ export function ServiceStack({
           key={searching ? "matches" : "catalog"}
           initial={{ opacity: 0, y: 4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="font-mono text-[10px] tracking-[0.18em] text-zinc-600 uppercase"
+          className={`font-mono text-[10px] tracking-[0.18em] uppercase ${
+            expanded || rail ? "text-sky-100/40" : "text-zinc-600"
+          }`}
         >
           {searching ? `${lifted.length} matches` : "Catalog"}
         </motion.p>
@@ -48,15 +50,13 @@ export function ServiceStack({
           </motion.span>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden pr-0.5">
+      <div className="min-h-0 flex-1 overflow-y-auto pr-0.5">
         <motion.div
           layout
           className={
             rail
               ? "grid grid-cols-3 gap-1"
-              : searching
-                ? "grid grid-cols-8 gap-2"
-                : "grid grid-cols-5 gap-1.5"
+              : "grid grid-cols-5 gap-1.5"
           }
         >
           {lifted.map((service, index) => {
@@ -82,16 +82,28 @@ export function ServiceStack({
                 className={`group flex flex-col items-center gap-1.5 rounded-xl border px-1.5 py-2.5 ${
                   ranked
                     ? "border-emerald-400/35 bg-emerald-400/5"
-                    : "border-transparent hover:border-white/12 hover:bg-white/[0.04]"
+                    : expanded
+                      ? "border-transparent hover:border-sky-100/18 hover:bg-white/[0.07]"
+                      : "border-transparent hover:border-white/12 hover:bg-white/[0.04]"
                 }`}
                 title={`${service.label} · ${service.category}`}
               >
+                <span
+                  className={`flex items-center justify-center ${
+                    expanded
+                      ? "rounded-2xl bg-black/20 p-1.5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.12)]"
+                      : ""
+                  }`}
+                >
                 <ServiceIcon
                   src={service.icon}
                   label={service.short}
                   size={iconSize}
                 />
-                <span className="w-full truncate text-center font-mono text-[10px] tracking-tight text-zinc-400 group-hover:text-zinc-100">
+                </span>
+                <span className={`w-full truncate text-center font-mono text-[10px] tracking-tight group-hover:text-zinc-100 ${
+                  expanded || rail ? "text-sky-100/70" : "text-zinc-400"
+                }`}>
                   {service.short}
                 </span>
               </motion.button>
