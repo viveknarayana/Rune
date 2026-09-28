@@ -4,14 +4,25 @@ import { useEffect, useState } from "react";
 export type HudMode = "idle" | "search" | "board";
 
 export const HUD_SIZE: Record<HudMode, { width: number; height: number }> = {
-  idle: { width: 820, height: 640 },
-  search: { width: 820, height: 640 },
-  board: { width: 1100, height: 700 },
+  idle: { width: 1280, height: 860 },
+  search: { width: 1280, height: 860 },
+  board: { width: 1680, height: 980 },
 };
 
 function browserSize(mode: HudMode) {
-  if (mode !== "board") return HUD_SIZE.idle;
-  return HUD_SIZE.board;
+  if (typeof window === "undefined") return HUD_SIZE[mode];
+  const workW = window.innerWidth;
+  const workH = window.innerHeight;
+  if (mode === "board") {
+    return {
+      width: Math.round(Math.min(workW - 48, Math.max(1200, workW * 0.92))),
+      height: Math.round(Math.min(workH - 48, Math.max(820, workH * 0.88))),
+    };
+  }
+  return {
+    width: Math.round(Math.min(workW * 0.82, Math.max(1080, workW * 0.74))),
+    height: Math.round(Math.min(workH * 0.86, Math.max(760, workH * 0.78))),
+  };
 }
 
 export function useHudSize(mode: HudMode) {

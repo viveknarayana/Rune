@@ -472,7 +472,7 @@ export default function App() {
     >
       <div
         className={`relative flex min-h-0 flex-col overflow-hidden ${
-          hasBoard ? "w-[268px] shrink-0 border-r border-sky-100/10" : "min-w-0 flex-1"
+          hasBoard ? "w-[300px] shrink-0 border-r border-sky-100/10" : "min-w-0 flex-1"
         }`}
       >
         <TideField variant={hasBoard ? "rail" : "idle"} />

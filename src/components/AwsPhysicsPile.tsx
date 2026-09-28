@@ -2,7 +2,9 @@ import { useLayoutEffect, useRef } from "react";
 import Matter from "matter-js";
 import { AWS_SERVICES, type AwsService } from "../lib/aws-catalog";
 
-const TILE = 48;
+const TILE = 68;
+const ICON = 44;
+const HIT = 38;
 const LERP = 0.16;
 const { Engine, Bodies, Composite, Body } = Matter;
 
@@ -79,13 +81,13 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
       bodiesRef.current.clear();
       visualRef.current.clear();
       parkedRef.current.clear();
-      const cols = Math.max(6, Math.floor(width / 58));
+      const cols = Math.max(7, Math.floor(width / (TILE + 12)));
       AWS_SERVICES.forEach((service, index) => {
         const col = index % cols;
         const row = Math.floor(index / cols);
-        const x = 28 + col * ((width - 56) / Math.max(1, cols - 1));
-        const y = 28 + (row % 4) * 22 + Math.random() * 18;
-        const body = Bodies.rectangle(x, y, TILE - 10, TILE - 10, {
+        const x = 36 + col * ((width - 72) / Math.max(1, cols - 1));
+        const y = 36 + (row % 4) * 26 + Math.random() * 20;
+        const body = Bodies.rectangle(x, y, TILE - 12, TILE - 12, {
           restitution: 0.16,
           friction: 0.85,
           frictionAir: 0.05,
@@ -140,7 +142,7 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
 
     const hitAt = (x: number, y: number) => {
       let best: string | null = null;
-      let bestDist = 30 * 30;
+      let bestDist = HIT * HIT;
       for (const [id, pose] of visualRef.current) {
         const dx = pose.x - x;
         const dy = pose.y - y;
@@ -320,7 +322,7 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
           const fallbackY = event.clientY - rect.top;
           let best: string | null = id;
           if (!best) {
-            let bestDist = 30 * 30;
+            let bestDist = HIT * HIT;
             for (const [key, pose] of visualRef.current) {
               const dx = pose.x - fallbackX;
               const dy = pose.y - fallbackY;
@@ -345,20 +347,20 @@ export function AwsPhysicsPile({ activeIds, onPick }: AwsPhysicsPileProps) {
               else nodesRef.current.delete(service.id);
             }}
             tabIndex={-1}
-            className="pointer-events-none absolute top-0 left-0 rounded-xl border bg-black/70 p-1.5 shadow-[0_8px_18px_rgba(0,0,0,0.45)]"
+            className="pointer-events-none absolute top-0 left-0 rounded-2xl border bg-black/70 p-2 shadow-[0_10px_22px_rgba(0,0,0,0.45)]"
             style={{
               width: TILE,
               height: TILE,
               borderColor: `${CATEGORY_COLOR[service.category]}66`,
-              transform: `translate3d(${12 + (index % 7) * 56}px, ${16 + (index % 5) * 18}px, 0)`,
+              transform: `translate3d(${16 + (index % 8) * (TILE + 10)}px, ${20 + (index % 5) * 22}px, 0)`,
             }}
           >
             <img
               src={service.icon}
               alt=""
-              width={30}
-              height={30}
-              className="pointer-events-none h-[30px] w-[30px] object-contain"
+              width={ICON}
+              height={ICON}
+              className="pointer-events-none h-[44px] w-[44px] object-contain"
               draggable={false}
             />
           </button>

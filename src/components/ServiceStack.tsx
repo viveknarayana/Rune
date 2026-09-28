@@ -25,7 +25,7 @@ export function ServiceStack({
   const lifted = searching
     ? services.slice(0, 48)
     : services.slice(0, expanded ? 36 : rail ? 12 : 20);
-  const iconSize = rail ? 26 : 32;
+  const iconSize = rail ? 32 : 40;
 
   return (
     <div className={`no-drag flex min-h-0 flex-col ${expanded ? "flex-1" : ""}`}>

@@ -19,10 +19,13 @@ fn target_for_mode(window: &WebviewWindow, mode: &str) -> (f64, f64) {
     let (work_w, work_h) = work_area_logical(window);
     match mode {
         "board" => (
-            (work_w * 0.62).clamp(960.0, 1180.0),
-            (work_h * 0.64).clamp(620.0, 760.0),
+            (work_w * 0.92).max(1200.0).min((work_w - 48.0).max(1200.0)),
+            (work_h * 0.88).max(820.0).min((work_h - 48.0).max(820.0)),
         ),
-        _ => (820.0, 640.0),
+        _ => (
+            (work_w * 0.74).max(1080.0).min(work_w * 0.82),
+            (work_h * 0.78).max(760.0).min(work_h * 0.86),
+        ),
     }
 }
 
