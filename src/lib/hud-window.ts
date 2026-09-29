@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 export type HudMode = "idle" | "search" | "board";
 
 export const HUD_SIZE: Record<HudMode, { width: number; height: number }> = {
-  idle: { width: 1280, height: 860 },
-  search: { width: 1280, height: 860 },
+  idle: { width: 1100, height: 740 },
+  search: { width: 1100, height: 740 },
   board: { width: 1680, height: 980 },
 };
 
@@ -20,8 +20,8 @@ function browserSize(mode: HudMode) {
     };
   }
   return {
-    width: Math.round(Math.min(workW * 0.82, Math.max(1080, workW * 0.74))),
-    height: Math.round(Math.min(workH * 0.86, Math.max(760, workH * 0.78))),
+    width: Math.round(Math.min(workW * 0.74, Math.max(960, workW * 0.66))),
+    height: Math.round(Math.min(workH * 0.78, Math.max(640, workH * 0.70))),
   };
 }
 

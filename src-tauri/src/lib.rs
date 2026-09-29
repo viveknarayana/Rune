@@ -23,9 +23,19 @@ fn target_for_mode(window: &WebviewWindow, mode: &str) -> (f64, f64) {
             (work_h * 0.88).max(820.0).min((work_h - 48.0).max(820.0)),
         ),
         _ => (
-            (work_w * 0.74).max(1080.0).min(work_w * 0.82),
-            (work_h * 0.78).max(760.0).min(work_h * 0.86),
+            (work_w * 0.66).max(960.0).min(work_w * 0.74),
+            (work_h * 0.70).max(640.0).min(work_h * 0.78),
         ),
+    }
+}
+
+fn center_on_work(window: &WebviewWindow, logical_w: f64, logical_h: f64) {
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let work = monitor.work_area();
+        let scale = monitor.scale_factor();
+        let x = work.position.x as f64 + (work.size.width as f64 - logical_w * scale) / 2.0;
+        let y = work.position.y as f64 + (work.size.height as f64 - logical_h * scale) / 2.0;
+        let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
     }
 }
 
@@ -35,9 +45,6 @@ fn animate_window_to(window: WebviewWindow, target_w: f64, target_h: f64) {
         let scale = window.scale_factor().unwrap_or(1.0);
         let from_w = start.width as f64 / scale;
         let from_h = start.height as f64 / scale;
-        let Ok(pos) = window.outer_position() else { return };
-        let cx = pos.x as f64 + start.width as f64 / 2.0;
-        let top = pos.y as f64;
         const STEPS: i32 = 16;
         for step in 1..=STEPS {
             let t = step as f64 / STEPS as f64;
@@ -45,10 +52,7 @@ fn animate_window_to(window: WebviewWindow, target_w: f64, target_h: f64) {
             let width = from_w + (target_w - from_w) * e;
             let height = from_h + (target_h - from_h) * e;
             let _ = window.set_size(LogicalSize::new(width, height));
-            let _ = window.set_position(PhysicalPosition::new(
-                (cx - width * scale / 2.0) as i32,
-                top as i32,
-            ));
+            center_on_work(&window, width, height);
             std::thread::sleep(Duration::from_millis(16));
         }
     });
@@ -109,13 +113,13 @@ fn toggle_overlay(app: &AppHandle) {
 }
 
 fn position_like_spotlight(window: &tauri::WebviewWindow) {
-    if let Ok(Some(monitor)) = window.current_monitor() {
-        if let Ok(size) = window.outer_size() {
-            let work = monitor.work_area();
-            let x = work.position.x + ((work.size.width as i32 - size.width as i32) / 2);
-            let y = work.position.y + (work.size.height as i32 / 18).max(28);
-            let _ = window.set_position(PhysicalPosition::new(x, y));
-        }
+    if let Ok(size) = window.outer_size() {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        center_on_work(
+            window,
+            size.width as f64 / scale,
+            size.height as f64 / scale,
+        );
     }
 }
 

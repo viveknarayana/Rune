@@ -25,7 +25,7 @@ export function CommandBar({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="no-drag">
+    <form onSubmit={handleSubmit} className="no-drag w-full">
       <div
         className={`flex items-center gap-2 rounded-full px-3 py-1.5 ${
           luminous

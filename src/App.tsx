@@ -501,7 +501,7 @@ export default function App() {
       className={
         inTauri
           ? "h-full w-full"
-          : "flex h-full w-full items-start justify-center pt-[4vh]"
+          : "flex h-full w-full items-center justify-center"
       }
     >
     <motion.div

@@ -8,8 +8,9 @@ const HIT = 32;
 const FLY = "transform 0.42s cubic-bezier(0.16, 1, 0.3, 1)";
 const Z_FALL = "1";
 const Z_MAGNET = "8";
-const Z_HELD = "10";
 const { Engine, Bodies, Composite, Body } = Matter;
+const STEP = 1000 / 60;
+const HALF = TILE / 2;
 
 const CATEGORY_COLOR: Record<AwsService["category"], string> = {
   Compute: "#FF9900",
@@ -59,12 +60,15 @@ export function AwsPhysicsPile({
   activeListRef.current = activeIds;
 
   const hitDom = (clientX: number, clientY: number) => {
+    const frame = containerRef.current?.getBoundingClientRect();
+    if (!frame) return null;
+    const px = clientX - frame.left;
+    const py = clientY - frame.top;
     let best: string | null = null;
     let bestDist = HIT * HIT;
-    for (const [id, node] of nodesRef.current) {
-      const box = node.getBoundingClientRect();
-      const dx = box.left + box.width / 2 - clientX;
-      const dy = box.top + box.height / 2 - clientY;
+    for (const [id, pose] of visualRef.current) {
+      const dx = pose.x - px;
+      const dy = pose.y - py;
       const dist = dx * dx + dy * dy;
       if (dist < bestDist) {
         bestDist = dist;
@@ -78,57 +82,52 @@ export function AwsPhysicsPile({
     const root = containerRef.current;
     if (!root) return;
 
-    const engine = Engine.create();
-    engine.enableSleeping = true;
+    const engine = Engine.create({ enableSleeping: true });
     engine.gravity.x = 0;
-    engine.gravity.y = 1.78;
+    engine.gravity.y = 0.95;
     engine.positionIterations = 6;
     engine.velocityIterations = 4;
-    engine.constraintIterations = 1;
 
     const syncWalls = (width: number, height: number) => {
       wallsRef.current.forEach((wall) => Composite.remove(engine.world, wall));
-      const floor = Bodies.rectangle(width / 2, height + 10, width * 2, 40, {
+      const floor = Bodies.rectangle(width / 2, height + 4, width * 2, 56, {
         isStatic: true,
         friction: 2,
         frictionStatic: 2,
         restitution: 0,
       });
       const wallH = height * 8;
-      const left = Bodies.rectangle(-18, height / 2, 36, wallH, { isStatic: true });
-      const right = Bodies.rectangle(width + 18, height / 2, 36, wallH, {
-        isStatic: true,
-      });
+      const slick = { isStatic: true, friction: 0.035, frictionStatic: 0.02, restitution: 0 };
+      const left = Bodies.rectangle(-18, height / 2, 36, wallH, slick);
+      const right = Bodies.rectangle(width + 18, height / 2, 36, wallH, slick);
       wallsRef.current = [floor, left, right];
       Composite.add(engine.world, wallsRef.current);
     };
 
-    const spawn = (width: number, height: number) => {
+    const spawn = (width: number) => {
       bodiesRef.current.forEach((body) => Composite.remove(engine.world, body));
       bodiesRef.current.clear();
       visualRef.current.clear();
       parkedRef.current.clear();
-      const spread = Math.max(220, height * 0.9);
       AWS_SERVICES.forEach((service) => {
-        const x = 36 + Math.random() * Math.max(40, width - 72);
-        const y = -TILE - 16 - Math.random() * spread - Math.random() * Math.random() * 280;
-        const body = Bodies.rectangle(x, y, TILE - 12, TILE - 12, {
+        const x = 48 + Math.random() * Math.max(80, width - 96);
+        const y = -80 - Math.random() * 520 - Math.random() * Math.random() * 380;
+        const body = Bodies.rectangle(x, y, 52, 52, {
           restitution: 0.02,
-          friction: 1.2,
-          frictionStatic: 1.4,
-          frictionAir: 0.032 + Math.random() * 0.035,
-          density: 0.0026 + Math.random() * 0.0012,
-          angle: (Math.random() - 0.5) * 0.4,
-          sleepThreshold: 10,
+          friction: 0.28 + Math.random() * 0.12,
+          frictionStatic: 0.2,
+          frictionAir: 0.008 + Math.random() * 0.016,
+          density: 0.0018 + Math.random() * 0.0016,
+          angle: (Math.random() - 0.5) * 0.55,
+          sleepThreshold: 28,
+          chamfer: { radius: 10 },
         });
         Body.setVelocity(body, {
-          x: (Math.random() - 0.5) * 1.1,
-          y: 3.4 + Math.random() * 6.2,
+          x: (Math.random() - 0.5) * 1.4,
+          y: 0.2 + Math.random() * 4.2,
         });
         bodiesRef.current.set(service.id, body);
-        const pose = { x, y, a: body.angle };
-        visualRef.current.set(service.id, pose);
-        parkedRef.current.set(service.id, { ...pose });
+        visualRef.current.set(service.id, { x, y, a: body.angle });
         Composite.add(engine.world, body);
       });
       spawnedRef.current = true;
@@ -140,7 +139,7 @@ export function AwsPhysicsPile({
       if (width < 80 || height < 80) return false;
       sizeRef.current = { w: width, h: height };
       syncWalls(width, height);
-      if (!spawnedRef.current) spawn(width, height);
+      if (!spawnedRef.current) spawn(width);
       return true;
     };
 
@@ -162,29 +161,73 @@ export function AwsPhysicsPile({
       }
       sizeRef.current = { w: width, h: height };
       syncWalls(width, height);
-      if (!spawnedRef.current) spawn(width, height);
+      if (!spawnedRef.current) spawn(width);
     });
     ro.observe(root);
 
-    const paint = (id: string, pose: Pose, z: string, flying: boolean, delay = 0) => {
-      const node = nodesRef.current.get(id);
-      if (!node) return;
-      node.style.transition = flying ? FLY : "none";
-      node.style.transitionDelay = flying ? `${delay}ms` : "0ms";
-      node.style.transform = `translate3d(${pose.x - TILE / 2}px, ${pose.y - TILE / 2}px, 0) rotate(${pose.a}rad)`;
-      node.style.zIndex = z;
+    const prevPos = new Map<string, Pose>();
+    let lastTs = performance.now();
+    let accumulator = 0;
+
+    const writeTransform = (node: HTMLElement, x: number, y: number, a: number) => {
+      node.style.transform = `translate3d(${x - HALF}px, ${y - HALF}px, 0) rotate(${a}rad)`;
     };
 
-    const STEP = 1000 / 60;
-    const prevPos = new Map<string, Pose>();
-    let physicsLive = true;
-    let still = 0;
+    const rescueBody = (body: Matter.Body, width: number, height: number) => {
+      let x = body.position.x;
+      let y = body.position.y;
+      const restY = height - 50;
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(body.angle)) {
+        Body.setPosition(body, { x: width * 0.5, y: restY });
+        Body.setAngle(body, 0);
+        Body.setVelocity(body, { x: 0, y: 0 });
+        Body.setAngularVelocity(body, 0);
+        return true;
+      }
+      if (body.velocity.y > 14) {
+        Body.setVelocity(body, { x: body.velocity.x * 0.85, y: 14 });
+      }
+      if (Math.abs(body.velocity.x) > 8) {
+        Body.setVelocity(body, {
+          x: Math.sign(body.velocity.x) * 8,
+          y: body.velocity.y,
+        });
+      }
+
+      let escaped = false;
+      if (x < -HALF) {
+        x = HALF + 2;
+        escaped = true;
+      } else if (x > width + HALF) {
+        x = width - HALF - 2;
+        escaped = true;
+      }
+      if (y > height + HALF) {
+        y = restY;
+        escaped = true;
+      }
+      if (escaped) {
+        Body.setPosition(body, { x, y });
+        Body.setVelocity(body, { x: 0, y: Math.max(0, Math.min(body.velocity.y, 6)) });
+        Body.setAngularVelocity(body, 0);
+        if (body.isSleeping) Body.set(body, { isSleeping: false });
+      }
+      return escaped;
+    };
+
+    const paintFly = (id: string, pose: Pose, z: string, delay: number) => {
+      const node = nodesRef.current.get(id);
+      if (!node) return;
+      node.style.transition = FLY;
+      node.style.transitionDelay = `${delay}ms`;
+      node.style.zIndex = z;
+      writeTransform(node, pose.x, pose.y, pose.a);
+    };
+
     let lastHover: string | null = null;
     let lastHeld: string | null = null;
     let lastSearch = false;
     let lastActiveKey = "";
-    let lastTs = performance.now();
-    let accumulator = 0;
     let frame = 0;
 
     const tick = () => {
@@ -214,16 +257,16 @@ export function AwsPhysicsPile({
         lastSearch = searching;
       }
 
-      if (physicsLive && !searching) {
+      if (!searching) {
         const now = performance.now();
         let frameDt = now - lastTs;
         lastTs = now;
-        if (frameDt > 48) frameDt = 48;
+        if (frameDt > 32) frameDt = 32;
         accumulator += frameDt;
-        let moving = false;
-        let steps = 0;
-        while (accumulator >= STEP && steps < 2) {
+        let stepped = false;
+        while (accumulator >= STEP) {
           for (const [id, body] of bodiesRef.current) {
+            if (active.has(id) || body.isStatic) continue;
             prevPos.set(id, {
               x: body.position.x,
               y: body.position.y,
@@ -231,41 +274,40 @@ export function AwsPhysicsPile({
             });
           }
           Engine.update(engine, STEP);
-          for (const [, body] of bodiesRef.current) {
-            const speed = Math.abs(body.velocity.x) + Math.abs(body.velocity.y);
-            const spin = Math.abs(body.angularVelocity);
-            const nearFloor = body.position.y > h - TILE * 2.4;
-            if (nearFloor && speed < 0.1 && spin < 0.012) {
-              Body.setVelocity(body, { x: 0, y: 0 });
-              Body.setAngularVelocity(body, 0);
-            } else {
-              moving = true;
+          for (const [id, body] of bodiesRef.current) {
+            if (active.has(id) || body.isStatic) continue;
+            if (rescueBody(body, w, h)) {
+              prevPos.set(id, {
+                x: body.position.x,
+                y: body.position.y,
+                a: body.angle,
+              });
             }
           }
           accumulator -= STEP;
-          steps += 1;
+          stepped = true;
         }
-        const alpha = Math.min(1, accumulator / STEP);
+        const alpha = stepped ? accumulator / STEP : 1;
         for (const [id, body] of bodiesRef.current) {
+          if (active.has(id) || body.isStatic) continue;
+          if (body.isSleeping && !stepped) continue;
+          const node = nodesRef.current.get(id);
+          if (!node) continue;
           const prev = prevPos.get(id);
-          const pose = prev
-            ? {
-                x: prev.x + (body.position.x - prev.x) * alpha,
-                y: prev.y + (body.position.y - prev.y) * alpha,
-                a: prev.a + (body.angle - prev.a) * alpha,
-              }
-            : { x: body.position.x, y: body.position.y, a: body.angle };
-          visualRef.current.set(id, pose);
+          const x = prev ? prev.x + (body.position.x - prev.x) * alpha : body.position.x;
+          const y = prev ? prev.y + (body.position.y - prev.y) * alpha : body.position.y;
+          const a = prev ? prev.a + (body.angle - prev.a) * alpha : body.angle;
+          if (node.style.transition !== "none") {
+            node.style.transition = "none";
+            node.style.transitionDelay = "0ms";
+          }
+          writeTransform(node, x, y, a);
+          visualRef.current.set(id, { x, y, a });
           parkedRef.current.set(id, {
             x: body.position.x,
             y: body.position.y,
             a: body.angle,
           });
-          paint(id, pose, hover === id ? Z_HELD : Z_FALL, false);
-        }
-        if (steps > 0) {
-          still = moving ? 0 : still + 1;
-          if (still > 18) physicsLive = false;
         }
       } else {
         lastTs = performance.now();
@@ -277,9 +319,18 @@ export function AwsPhysicsPile({
         lastActiveKey = activeKey;
         AWS_SERVICES.forEach((service) => {
           const node = nodesRef.current.get(service.id);
+          const body = bodiesRef.current.get(service.id);
           if (!node) return;
           const magnet = active.has(service.id);
           if (magnet) {
+            if (body && !body.isStatic) {
+              parkedRef.current.set(service.id, {
+                x: body.position.x,
+                y: body.position.y,
+                a: body.angle,
+              });
+              Body.setStatic(body, true);
+            }
             const slot = Math.max(0, slots.indexOf(service.id));
             const pose = {
               x: originX + (slot % cols) * (TILE + gap),
@@ -288,12 +339,19 @@ export function AwsPhysicsPile({
             };
             visualRef.current.set(service.id, pose);
             node.classList.add("is-magnet");
-            paint(service.id, pose, Z_MAGNET, true, slot * 28);
+            paintFly(service.id, pose, Z_MAGNET, slot * 28);
           } else {
-            const home = parkedRef.current.get(service.id);
-            if (home) visualRef.current.set(service.id, home);
             node.classList.remove("is-magnet");
-            if (home) paint(service.id, home, Z_FALL, true);
+            if (body?.isStatic) Body.setStatic(body, false);
+            const home =
+              parkedRef.current.get(service.id) ??
+              (body
+                ? { x: body.position.x, y: body.position.y, a: body.angle }
+                : undefined);
+            if (home) {
+              visualRef.current.set(service.id, home);
+              paintFly(service.id, home, Z_FALL, 0);
+            }
           }
         });
       }
@@ -383,13 +441,14 @@ export function AwsPhysicsPile({
               else nodesRef.current.delete(service.id);
             }}
             tabIndex={-1}
-            className="pointer-events-none absolute top-0 left-0 rounded-2xl border bg-black/70 p-2 shadow-[0_10px_22px_rgba(0,0,0,0.45)]"
+            className="pointer-events-none absolute top-0 left-0 rounded-2xl border bg-black/70 p-2"
             style={{
               width: TILE,
               height: TILE,
               borderColor: `${CATEGORY_COLOR[service.category]}66`,
               zIndex: 1,
-              transform: `translate3d(${24 + (index % 11) * 70}px, ${-TILE - (index % 17) * 36 - (index % 5) * 80}px, 0)`,
+              transformOrigin: "center center",
+              transform: `translate3d(${40 + (index * 47) % 400}px, ${-90 - (index % 13) * 55}px, 0)`,
             }}
           >
             <span className="tile-face pointer-events-none flex h-full w-full items-center justify-center">

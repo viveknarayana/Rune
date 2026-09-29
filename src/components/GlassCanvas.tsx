@@ -397,19 +397,6 @@ export function GlassCanvas({
                     transition={{ duration: 0.35, ease: "easeOut" }}
                     style={{ pointerEvents: "none" }}
                   />
-                  {edge.label && (
-                    <text
-                      x={path.labelX}
-                      y={path.labelY}
-                      fill={hot ? "#E4E4E7" : "#71717A"}
-                      fontSize="10"
-                      textAnchor="middle"
-                      className="font-mono"
-                      style={{ pointerEvents: "none" }}
-                    >
-                      {edge.label}
-                    </text>
-                  )}
                 </g>
               );
             })}
@@ -488,9 +475,23 @@ export function GlassCanvas({
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
-                      <span className="truncate font-mono text-[8px] tracking-[0.14em] text-zinc-500 uppercase">
-                        {node.type}
-                      </span>
+                      <svg
+                        className="h-3.5 min-w-0 flex-1 overflow-visible text-zinc-400"
+                        aria-hidden
+                      >
+                        <text
+                          x="0"
+                          y="11"
+                          fill="currentColor"
+                          fontFamily="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace"
+                          fontSize="11"
+                          fontWeight="500"
+                          letterSpacing="0.55"
+                          textRendering="geometricPrecision"
+                        >
+                          {node.type}
+                        </text>
+                      </svg>
                       <span className="relative flex h-1.5 w-1.5 shrink-0">
                         {isWarning && (
                           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-70" />
@@ -503,7 +504,7 @@ export function GlassCanvas({
                         />
                       </span>
                     </div>
-                    <h3 className="truncate text-[11px] leading-tight font-medium tracking-tight text-zinc-100">
+                    <h3 className="truncate text-[12px] leading-tight font-medium tracking-tight text-zinc-100 [text-rendering:geometricPrecision]">
                       {node.label}
                     </h3>
                   </div>
@@ -513,6 +514,44 @@ export function GlassCanvas({
           })}
         </div>
       </div>
+
+      <svg
+        className="pointer-events-none absolute inset-0 z-[15] overflow-visible"
+        width={viewport.width}
+        height={viewport.height}
+      >
+        {edges.map((edge, idx) => {
+          const source = nodeMap.get(edge.source);
+          const target = nodeMap.get(edge.target);
+          if (!source || !target || !edge.label) return null;
+          const path = edgePath(
+            source,
+            target,
+            edgeLane(edges, idx, (id) => nodeMap.get(id)),
+          );
+          const at = worldToScreen(path.labelX, path.labelY, camera);
+          const hot =
+            selectedEdge?.source === edge.source &&
+            selectedEdge?.target === edge.target;
+          return (
+            <text
+              key={`elabel-${edge.source}-${edge.target}-${idx}`}
+              x={at.x}
+              y={at.y}
+              fill={hot ? "#E4E4E7" : "#A1A1AA"}
+              fontFamily="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace"
+              fontSize="10"
+              fontWeight="500"
+              letterSpacing="0.28"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              textRendering="geometricPrecision"
+            >
+              {edge.label}
+            </text>
+          );
+        })}
+      </svg>
 
       {(() => {
         const picked = displayNodes.find(

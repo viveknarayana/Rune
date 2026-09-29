@@ -8,7 +8,7 @@ interface PatternStackProps {
 
 export function PatternStack({ rail, luminous, onPick }: PatternStackProps) {
   return (
-    <div className={`no-drag ${rail ? "mb-3" : "mb-4"}`}>
+    <div className={`no-drag w-full ${rail ? "mb-3" : "mb-4"}`}>
       <p
         className={`mb-2 px-0.5 font-mono tracking-[0.18em] uppercase ${
           rail ? "text-[10px]" : "text-[11px]"
@@ -16,7 +16,7 @@ export function PatternStack({ rail, luminous, onPick }: PatternStackProps) {
       >
         Patterns
       </p>
-      <div className={rail ? "grid grid-cols-2 gap-1.5" : "grid grid-cols-3 gap-2.5"}>
+      <div className={rail ? "grid w-full grid-cols-2 gap-1.5" : "grid w-full grid-cols-3 gap-2.5"}>
         {PATTERNS.map((pattern) => (
           <button
             key={pattern.id}
