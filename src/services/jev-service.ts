@@ -6,6 +6,7 @@ import {
 import { isIntentAction } from "../lib/intents";
 import {
   hangSubsystemNodes,
+  omitNodes,
   isIamNode,
   isPublicHopNode,
   repairRequestGraph,
@@ -37,7 +38,7 @@ const TOPOLOGY_CRITERIA = {
   PATTERN_SEARCH_INDEXING:
     "Search and indexing: search engine, catalog filter, autocomplete, full-text. Gateway → search service → OpenSearch, plus CDC from primary DB.",
   INTENT_FASTER:
-    "User wants the system faster: lower latency or cheaper reads. Merge CDN, Redis, and read replicas. Do not wipe the graph.",
+    "User wants the system faster on an existing path: Redis and read replicas on the named service. CDN is optional and decided in the hang pass. Do not wipe the graph.",
   INTENT_RELIABLE:
     "User wants reliability or high availability. Keep existing nodes; add replicas and a queue buffer.",
   INTENT_SECURE:
@@ -130,9 +131,7 @@ async function placeSubsystemWithJev(
   if (!added.length || !before.nodes.length) {
     return { state: repairRequestGraph(after), steps: [] };
   }
-  const extras = added
-    .filter((node) => !isPublicHopNode(node) && !isIamNode(node))
-    .slice(0, 8);
+  const extras = added.slice(0, 10);
   if (!extras.length) {
     return { state: repairRequestGraph(after), steps: [] };
   }
@@ -142,7 +141,8 @@ async function placeSubsystemWithJev(
   const hangChoicesFor = (extraId: string) => {
     const others = extras.filter((node) => node.id !== extraId);
     return [
-      ["keep", "Recipe already attached this extra correctly. Rare — only if the inbound edge is already the named producer."],
+      ["skip", "Do not add this box. Use when the prompt does not justify it (CDN/WAF/Shield on a named service path; extras that belong to a different pattern)."],
+      ["keep", "Add it, and the recipe already attached it correctly."],
       ...before.nodes.map((node) => [
         node.id,
         `Existing: ${node.label} [${node.type}] id=${node.id}`,
@@ -168,7 +168,7 @@ async function placeSubsystemWithJev(
           `hang_${node.id}`,
           {
             type: "choice" as const,
-            instructions: `Hang ${node.label} [${node.type}] on the producer that owns it. Cache and replicas belong on the order/app write path (Cache Hit / Cache Miss / Replicate). Never hang WAF, CDN, CloudFront, or IAM on a service — those stay on Client → Gateway.`,
+            instructions: `Decide if ${node.label} [${node.type}] belongs in this change. Skip if the prompt does not need it. CDN/CloudFront/WAF/Shield: skip unless they asked for public-edge cache or DDoS/WAF; never hang those on a service. Cache and replicas: keep and hang on the named app/order path. IAM: hang on Auth only.`,
             criteria: Object.fromEntries(hangChoicesFor(node.id)),
           },
         ]),
@@ -176,20 +176,43 @@ async function placeSubsystemWithJev(
     });
 
     const answers = decision.answers as Record<string, { choice?: string }>;
-    const hangs = extras.flatMap((node) => {
+    const omitted: string[] = [];
+    const hangs: Array<{ extraId: string; fromId: string }> = [];
+    for (const node of extras) {
       const picked = answers[`hang_${node.id}`]?.choice;
-      if (!picked || picked === "keep") return [];
-      return [{ extraId: node.id, fromId: picked }];
-    });
-    if (!hangs.length) return { state: repairRequestGraph(after), steps: [] };
+      if (picked === "skip") {
+        omitted.push(node.id);
+        continue;
+      }
+      if (!picked || picked === "keep") continue;
+      const from = after.nodes.find((item) => item.id === picked);
+      if (
+        !from ||
+        (isPublicHopNode(node) && from.type === "SERVICE") ||
+        (isIamNode(node) && from.type !== "SECURITY")
+      ) {
+        omitted.push(node.id);
+        continue;
+      }
+      hangs.push({ extraId: node.id, fromId: picked });
+    }
 
-    const state = hangSubsystemNodes(after, hangs, priorIds);
-    const steps = hangs.flatMap((hang) => {
-      const extra = state.nodes.find((node) => node.id === hang.extraId);
-      const from = state.nodes.find((node) => node.id === hang.fromId);
-      if (!extra || !from) return [];
-      return [`Jev hung ${extra.label} off ${from.label}`];
-    });
+    let state = omitNodes(after, omitted);
+    if (hangs.length) state = hangSubsystemNodes(state, hangs, priorIds);
+    else state = repairRequestGraph(state);
+
+    const steps = [
+      ...omitted.flatMap((id) => {
+        const extra = after.nodes.find((node) => node.id === id);
+        return extra ? [`Jev skipped ${extra.label}`] : [];
+      }),
+      ...hangs.flatMap((hang) => {
+        const extra = state.nodes.find((node) => node.id === hang.extraId);
+        const from = state.nodes.find((node) => node.id === hang.fromId);
+        if (!extra || !from) return [];
+        return [`Jev hung ${extra.label} off ${from.label}`];
+      }),
+    ];
     return { state, steps };
   } catch (error) {
     throw error instanceof Error

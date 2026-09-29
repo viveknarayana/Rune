@@ -1168,6 +1168,31 @@ export function inferApplyMode(prompt: string): ApplyMode | undefined {
   return undefined;
 }
 
+export function omitNodes(state: CanvasState, ids: Iterable<string>): CanvasState {
+  const drop = new Set(ids);
+  if (!drop.size) return repairRequestGraph(state);
+  const next = cloneState(state);
+  next.nodes = next.nodes.filter((node) => !drop.has(node.id));
+  next.edges = next.edges.filter(
+    (edge) => !drop.has(edge.source) && !drop.has(edge.target),
+  );
+  next.groups = next.groups
+    .map((group) => ({
+      ...group,
+      memberIds: group.memberIds.filter((id) => !drop.has(id)),
+    }))
+    .filter((group) => group.memberIds.length > 0);
+  return repairRequestGraph(next);
+}
+
+function canHangExtra(extra: GraphNode, from: GraphNode) {
+  if (isPublicHopNode(extra)) {
+    return from.type === "FRONTEND" || from.type === "GATEWAY";
+  }
+  if (isIamNode(extra)) return from.type === "SECURITY" && !isIamNode(from);
+  return true;
+}
+
 export function hangSubsystemNodes(
   state: CanvasState,
   hangs: Array<{ extraId: string; fromId: string }>,
@@ -1196,7 +1221,7 @@ export function hangSubsystemNodes(
     const extra = next.nodes.find((item) => item.id === hang.extraId);
     const from = next.nodes.find((item) => item.id === hang.fromId);
     if (!extra || !from) continue;
-    if (isPublicHopNode(extra) || isIamNode(extra)) continue;
+    if (!canHangExtra(extra, from)) continue;
     if (alreadyLinked(next.edges, hang.fromId, hang.extraId)) continue;
     next.edges.push({
       source: hang.fromId,
