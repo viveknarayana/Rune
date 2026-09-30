@@ -7,3 +7,12 @@ dist
 src-tauri/target
 src-tauri/gen
 *.log
+*.mov
+*.mp4
+!docs/rune-demo.mp4
+remotion/node_modules
+remotion/out
+remotion/public
+render_rune.py
+*.cursor.json
+*.cursor3.json
