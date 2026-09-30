@@ -575,17 +575,19 @@ const FLOWS: Record<string, string[]> = {
   EDGE: ["GATEWAY", "SERVICE"],
   GATEWAY: ["SECURITY", "SERVICE", "CACHE"],
   SECURITY: ["GATEWAY", "SERVICE"],
-  SERVICE: ["CACHE", "STORAGE", "TELEMETRY", "SERVICE", "GATEWAY"],
+  SERVICE: ["CACHE", "STORAGE", "QUEUE", "TELEMETRY", "SERVICE", "GATEWAY"],
   CACHE: ["STORAGE", "SERVICE"],
   STORAGE: ["SERVICE"],
+  QUEUE: ["SERVICE"],
   TELEMETRY: ["SERVICE", "STORAGE"],
-  CUSTOM: ["SERVICE", "GATEWAY", "STORAGE", "TELEMETRY"],
+  CUSTOM: ["SERVICE", "GATEWAY", "STORAGE", "QUEUE", "TELEMETRY"],
 };
 
 function wireLabel(sourceType: string, targetType: string): string {
   if (targetType === "STORAGE") return "Write";
   if (targetType === "CACHE") return "Cache";
   if (targetType === "SECURITY") return "Verify";
+  if (targetType === "QUEUE") return "Enqueue";
   if (targetType === "TELEMETRY") return "Emit";
   if (sourceType === "FRONTEND" || sourceType === "EDGE") return "HTTPS";
   return "Link";
@@ -631,7 +633,7 @@ function autoWire(
   if (
     addedFlowsToPartner &&
     !partnerFlowsToAdded &&
-    !["STORAGE", "CACHE", "TELEMETRY"].includes(added.type)
+    !["STORAGE", "CACHE", "QUEUE", "TELEMETRY"].includes(added.type)
   ) {
     source = added;
     target = partner;

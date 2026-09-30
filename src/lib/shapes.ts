@@ -30,6 +30,7 @@ export function shapeForType(type: string): DiagramShape {
       return "cylinder";
     case "CACHE":
       return "cache";
+    case "QUEUE":
     case "TELEMETRY":
       return "queue";
     case "EDGE":

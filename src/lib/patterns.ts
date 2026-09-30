@@ -148,8 +148,8 @@ export const PATTERNS: DesignPattern[] = [
     edges: [
       { source: "cdn", target: "cache_gw", label: "HTTPS" },
       { source: "cache_gw", target: "cache_app", label: "Route" },
-      { source: "cache_app", target: "redis", label: "Cache Hit" },
-      { source: "cache_app", target: "pg_replica", label: "Cache Miss" },
+      { source: "cache_app", target: "redis", label: "Cache Lookup" },
+      { source: "cache_app", target: "pg_replica", label: "Read Query" },
       { source: "pg_primary", target: "pg_replica", label: "Replicate" },
     ],
     groups: [],
@@ -184,7 +184,7 @@ export const PATTERNS: DesignPattern[] = [
       n("job_client", "Client", "FRONTEND", "amplify"),
       n("job_gw", "API Gateway", "GATEWAY", "api gateway"),
       n("producer", "Task Producer", "SERVICE", "lambda"),
-      n("job_queue", "Message Queue", "TELEMETRY", "sqs"),
+      n("job_queue", "Message Queue", "QUEUE", "sqs"),
       n("worker_a", "Worker A", "SERVICE", "ecs"),
       n("worker_b", "Worker B", "SERVICE", "ecs"),
       n("worker_c", "Worker C", "SERVICE", "ecs"),
@@ -449,7 +449,7 @@ const ROLE_TYPES: Record<string, string[]> = {
   edge: ["EDGE"],
   gateway: ["GATEWAY"],
   cache: ["CACHE"],
-  queue: ["TELEMETRY"],
+  queue: ["QUEUE", "TELEMETRY"],
   auth: ["SECURITY"],
   app: ["SERVICE"],
   replica: ["STORAGE"],
@@ -691,9 +691,10 @@ function isReplicaNode(node: GraphNode) {
 }
 
 function hangEdgeLabel(from: GraphNode, extra: GraphNode) {
-  if (extra.type === "CACHE") return "Cache Hit";
+  if (extra.type === "CACHE") return "Cache Lookup";
+  if (extra.type === "QUEUE") return "Enqueue";
   if (isReplicaNode(extra) && from.type === "STORAGE") return "Replicate";
-  if (isReplicaNode(extra)) return "Cache Miss";
+  if (isReplicaNode(extra)) return "Read Query";
   return "Attach";
 }
 
@@ -730,13 +731,13 @@ export function repairRequestGraph(state: CanvasState): CanvasState {
     const target = node(edge.target);
     if (!source || !target) return edge;
     if (target.type === "CACHE" && (source.type === "SERVICE" || source.type === "GATEWAY")) {
-      return { ...edge, label: "Cache Hit" };
+      return { ...edge, label: "Cache Lookup" };
     }
     if (isReplicaNode(target) && source.type === "STORAGE") {
       return { ...edge, label: "Replicate" };
     }
-    if (isReplicaNode(target) && source.type === "SERVICE") {
-      return { ...edge, label: "Cache Miss" };
+    if (isReplicaNode(target) && (source.type === "SERVICE" || source.type === "GATEWAY")) {
+      return { ...edge, label: "Read Query" };
     }
     if (
       hasCache &&
@@ -808,6 +809,44 @@ export function repairRequestGraph(state: CanvasState): CanvasState {
       target: afterCdn.id,
       label: "Edge",
     });
+  }
+
+  for (const replica of next.nodes.filter(isReplicaNode)) {
+    const primaries = next.edges
+      .filter((edge) => edge.target === replica.id)
+      .map((edge) => node(edge.source))
+      .filter(
+        (item): item is GraphNode =>
+          Boolean(item) && item.type === "STORAGE" && !isReplicaNode(item),
+      );
+    const readers = new Set<string>();
+    for (const primary of primaries) {
+      for (const edge of next.edges) {
+        if (edge.target !== primary.id) continue;
+        const source = node(edge.source);
+        if (source?.type === "SERVICE" || source?.type === "GATEWAY") {
+          readers.add(source.id);
+        }
+      }
+    }
+    if (!readers.size) {
+      for (const cache of next.nodes.filter((item) => item.type === "CACHE")) {
+        for (const edge of next.edges) {
+          if (edge.target !== cache.id) continue;
+          const source = node(edge.source);
+          if (source?.type === "SERVICE") readers.add(source.id);
+        }
+      }
+    }
+    for (const reader of readers) {
+      if (!alreadyLinked(next.edges, reader, replica.id)) {
+        next.edges.push({
+          source: reader,
+          target: replica.id,
+          label: "Read Query",
+        });
+      }
+    }
   }
 
   return next;
@@ -1010,7 +1049,7 @@ function applyOverlay(
         next.edges.push({
           source: writer.id,
           target: fresh.id,
-          label: "Cache Hit",
+          label: "Cache Lookup",
         });
       }
       if (writer) {
@@ -1051,12 +1090,22 @@ function applyOverlay(
       if (db) stores.add(db.id);
     }
     for (const source of producers) {
-      if (!alreadyLinked(next.edges, source, replica.id)) {
-        next.edges.push({ source, target: replica.id, label: "Cache Miss" });
+      const producer = next.nodes.find((item) => item.id === source);
+      if (
+        producer &&
+        (producer.type === "SERVICE" || producer.type === "GATEWAY") &&
+        !alreadyLinked(next.edges, source, replica.id)
+      ) {
+        next.edges.push({ source, target: replica.id, label: "Read Query" });
       }
     }
     for (const store of stores) {
-      if (store !== replica.id && !alreadyLinked(next.edges, store, replica.id)) {
+      const db = next.nodes.find((item) => item.id === store);
+      if (
+        db?.type === "STORAGE" &&
+        !isReplicaNode(db) &&
+        !alreadyLinked(next.edges, store, replica.id)
+      ) {
         next.edges.push({ source: store, target: replica.id, label: "Replicate" });
       }
     }

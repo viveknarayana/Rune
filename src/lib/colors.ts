@@ -10,6 +10,7 @@ export const DEFAULT_PALETTE: ColorPalette = {
   SERVICE: "#34D399",
   CACHE: "#FB7185",
   STORAGE: "#818CF8",
+  QUEUE: "#2DD4BF",
   TELEMETRY: "#22D3EE",
   CUSTOM: "#E5E7EB",
 };

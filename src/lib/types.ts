@@ -67,6 +67,7 @@ export const NODE_TYPES = [
   "SERVICE",
   "CACHE",
   "STORAGE",
+  "QUEUE",
   "TELEMETRY",
   "CUSTOM",
 ] as const;
