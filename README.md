@@ -23,11 +23,20 @@ Put `VITE_TYPESAFE_API_KEY` in `.env` so compiles can call Jev. The HUD will not
 
 ## How it works
 
-1. **Describe** — `e-commerce checkout with auth, orders, and payments`
-2. **Modify** — click a node, then `too slow, speed up the order path` (Redis + read replicas on that path)
-3. **Extend** — `attach a job queue and async workers to the order service so confirmation emails don't block checkout`
+The HUD stays on top of your desktop. Search is always focused: type a service name and matching tiles lift out of the falling catalog; click one to stamp it on the board. Hover a tile for its name. Click a node on the diagram to select it — that box becomes the attach point for the next prompt, and the inspector shows what it is.
 
-The catalog pile is real Matter physics. Search lifts matching AWS services; click a tile to drop it onto the canvas. You can also add, connect, group, and recolor by name.
+**Talk to an empty board.** Describe a system in English (`SaaS API with auth`, `event pipeline for clickstream`, `search over a product catalog`). Jev picks a topology, maps roles onto AWS services, and Dagre lays it out. You get Client → edge/gateway → services → data, with official icons, not a blank grid.
+
+**Talk to the graph you already have.** Follow-ups do not start over. Jev decides whether each extra from a recipe belongs (skip a CDN on a service-level speedup; keep Redis on the path you named). Then it hangs what it kept on the right producer. Typical moves:
+
+- Make a path faster — cache lookup + read replicas on the selected service, not a random hop
+- Move slow work off the request — queue and workers as a side branch
+- Tighten the public edge — WAF / CloudFront stay on Client → Gateway, never in the middle of Order → Payment
+- Add search, async jobs, or a write pipeline as an overlay, inject, split, or bridge instead of duplicating the whole mesh
+
+**Edit by name when you do not want Jev.** `Add Route 53`, `connect it to the API gateway`, `group app and database`, `color the database orange`, undo, reset. Drag nodes; positions stick. Multi-step prompts (`Add IAM, then connect to Auth`) run in order.
+
+The catalog is Matter.js physics behind the glass. Patterns and intents are recipes; Jev is the classifier that chooses which recipe and where each new box lands.
 
 ## Stack
 
