@@ -1,5 +1,4 @@
 # Rune
-https://x.com/v6vek/status/2105753701080285384
 
 Talk to a live AWS architecture diagram.
 
