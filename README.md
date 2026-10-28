@@ -1,5 +1,5 @@
 # Rune
-
+https://x.com/v6vek/status/2105753701080285384
 Talk to a live AWS architecture diagram.
 
 Rune is a frameless native HUD (`⌘⇧J` to show, `Esc` to hide). Type what you are building. Jev classifies the graph, hangs official AWS architecture icons onto the right path, and follow-up prompts edit the diagram you already have — cache, replicas, queues, workers — without wiping the board.
